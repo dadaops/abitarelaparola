@@ -21,6 +21,29 @@ Nei file di `site/` l'indirizzo del sito compare come `__SITE_URL__`: non va scr
 scripts/build.sh https://abitarelaparola.it _site
 ```
 
+## Google Analytics
+
+La pagina usa Google Analytics 4 (`G-LQWW7TVVDQ`). Oltre alle visualizzazioni invia questi eventi:
+
+| Evento | Quando | Parametri |
+|---|---|---|
+| `iscrizione_click` | clic su un pulsante di iscrizione | `posizione`, `link_url` |
+| `brochure_download` | clic su un link alla brochure | `posizione`, `file_name` |
+| `contatto_email_click` | clic sull'indirizzo email | `posizione` |
+| `navigazione_click` | clic su un link interno (menu, «Guarda il programma») | `posizione`, `sezione` |
+| `faq_apertura` | apertura di una domanda frequente | `domanda` |
+| `sezione_vista` | una sezione arriva a metà schermo (una volta per visita) | `sezione` |
+
+`posizione` viene dall'attributo `data-posizione` dei link: `header`, `menu`, `hero`, `in_breve`, `relatori`,
+`quota`, `faq`, `chiusura`, `footer`, `barra_mobile`. Per un nuovo link basta aggiungere l'attributo.
+
+Da configurare una volta in Google Analytics (Amministrazione):
+
+- **Eventi chiave**: segna `iscrizione_click` come evento chiave (è l'obiettivo principale) e, se utile,
+  `brochure_download` e `contatto_email_click`. Gli eventi compaiono nell'elenco dopo il primo invio.
+- **Definizioni personalizzate**: crea le dimensioni con ambito evento `posizione`, `sezione`, `domanda` e
+  `file_name`, altrimenti i parametri non sono visibili nei report.
+
 ## GitHub Pages
 
 Questa è la strada da seguire se il sito resta su GitHub. Se il sito va su Tophost, salta alla sezione
