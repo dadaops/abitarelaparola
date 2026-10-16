@@ -8,7 +8,9 @@ Landing page del corso di formazione «Abitare la parola» (Palermo, 7–8 novem
 |---|---|
 | `site/` | Il sito pubblicato: `index.html`, `assets/`, `robots.txt`, `sitemap.xml` |
 | `scripts/build.sh` | Copia `site/` in `_site/` e sostituisce i segnaposto con l'indirizzo reale |
-| `.github/workflows/pages.yml` | Pubblica su GitHub Pages a ogni push su `main` |
+| `scripts/build-redirect.sh` | Prepara le pagine che reindirizzano al sito definitivo |
+| `.github/workflows/pages.yml` | Pubblica il sito su GitHub Pages a ogni push su `main` |
+| `.github/workflows/pages-redirect.yml` | Al posto del sito, pubblica su GitHub Pages un reindirizzamento al sito definitivo (spento finché non è configurato) |
 | `.github/workflows/sftp.yml` | Pubblica via SFTP, FTPS o FTP su un server a ogni push su `main` (spento finché non è configurato) |
 
 Nei file di `site/` l'indirizzo del sito compare come `__SITE_URL__`: non va scritto a mano, lo inserisce
@@ -25,7 +27,33 @@ Questa è la strada da seguire se il sito resta su GitHub. Se il sito va su Toph
 
 Indirizzo attuale: https://dadaops.dev/abitarelaparola/
 
-Per spegnere la pubblicazione su Pages senza toccare i file: variabile del repo `PAGES_ENABLED=false`.
+### Dismettere dadaops.dev/abitarelaparola quando il sito definitivo è online
+
+Per non danneggiare la SEO, il vecchio indirizzo non va semplicemente spento (risponderebbe 404):
+va reindirizzato al sito definitivo. Così Google trasferisce il posizionamento e i link già condivisi,
+per esempio su WhatsApp, continuano a funzionare.
+
+1. Verifica che https://abitarelaparola.it risponda con il sito aggiornato.
+2. Attiva il reindirizzamento e pubblicalo:
+
+   ```bash
+   gh variable set PAGES_REDIRECT_TO --repo dadaops/abitarelaparola --body https://abitarelaparola.it
+   gh workflow run pages-redirect.yml --repo dadaops/abitarelaparola
+   ```
+
+   Da quel momento `pages.yml` non pubblica più il sito su Pages e ogni push aggiorna solo il reindirizzamento.
+   Ogni indirizzo mantiene il proprio percorso:
+   `https://dadaops.dev/abitarelaparola/assets/anteprima.jpg` porta a `https://abitarelaparola.it/assets/anteprima.jpg`.
+3. Dopo qualche mese, quando Google ha recepito il nuovo indirizzo (verificalo in Search Console),
+   puoi spegnere del tutto Pages:
+
+   ```bash
+   gh variable set PAGES_ENABLED --repo dadaops/abitarelaparola --body false
+   gh api -X DELETE repos/dadaops/abitarelaparola/pages
+   ```
+
+Per tornare a pubblicare il sito su Pages: `gh variable delete PAGES_REDIRECT_TO --repo dadaops/abitarelaparola`
+e poi `gh workflow run pages.yml --repo dadaops/abitarelaparola`.
 
 ### Passaggio al dominio abitarelaparola.it
 
@@ -111,12 +139,5 @@ I dati di accesso sono nell'email di attivazione dell'hosting e nel pannello di 
 5. Verifica che il sito risponda su `https://abitarelaparola.it` e che il certificato HTTPS sia attivo
    (da attivare nel pannello Tophost, se non è automatico).
 6. Con il sito su Tophost, i DNS del dominio restano quelli di Tophost: **non** seguire i passi
-   «Passaggio al dominio abitarelaparola.it» della sezione GitHub Pages. Spegni Pages per non avere
-   due copie della pagina indicizzate:
-
-   ```bash
-   gh variable set PAGES_ENABLED --repo dadaops/abitarelaparola --body false
-   gh api -X DELETE repos/dadaops/abitarelaparola/pages
-   ```
-
-   Il secondo comando toglie dalla rete l'indirizzo https://dadaops.dev/abitarelaparola/.
+   «Passaggio al dominio abitarelaparola.it» della sezione GitHub Pages. Segui invece
+   «Dismettere dadaops.dev/abitarelaparola», per non avere due copie della pagina indicizzate.

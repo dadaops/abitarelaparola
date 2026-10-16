@@ -1,6 +1,7 @@
 name: Pubblica su GitHub Pages
 
-# Per spegnerlo senza modificare il file: variabile del repo PAGES_ENABLED=false.
+# Si ferma se la variabile del repo PAGES_ENABLED vale false, oppure se PAGES_REDIRECT_TO è
+# impostata: in quel caso su Pages lavora pages-redirect.yml.
 on:
   push:
     branches: [main]
@@ -17,7 +18,7 @@ concurrency:
 
 jobs:
   build:
-    if: vars.PAGES_ENABLED != 'false'
+    if: vars.PAGES_ENABLED != 'false' && vars.PAGES_REDIRECT_TO == ''
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5

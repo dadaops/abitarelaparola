@@ -1,0 +1,48 @@
+name: Reindirizza GitHub Pages al sito definitivo
+
+# Attivo solo quando la variabile del repo PAGES_REDIRECT_TO contiene l'indirizzo del sito
+# definitivo (es. https://abitarelaparola.it). In quel caso pages.yml si ferma e questo
+# workflow pubblica su GitHub Pages solo pagine di reindirizzamento.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: vars.PAGES_REDIRECT_TO != '' && vars.PAGES_ENABLED != 'false'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - id: pages
+        uses: actions/configure-pages@v5
+
+      - name: Prepara il reindirizzamento
+        env:
+          TARGET: ${{ vars.PAGES_REDIRECT_TO }}
+          BASE_PATH: ${{ steps.pages.outputs.base_path }}
+        run: scripts/build-redirect.sh "$TARGET" "$BASE_PATH" _site
+
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
