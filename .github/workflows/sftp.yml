@@ -1,7 +1,8 @@
-name: Pubblica via SFTP
+name: Pubblica via SFTP/FTP
 
 # Spento finché la variabile del repo SFTP_ENABLED non vale "true".
-# Configurazione richiesta: vedi README.md, sezione «Pubblicazione via SFTP».
+# SFTP_PROTOCOL sceglie il protocollo: sftp (predefinito), ftps o ftp.
+# Configurazione richiesta: vedi README.md, sezione «Pubblicazione su un server remoto».
 on:
   push:
     branches: [main]
@@ -20,22 +21,33 @@ jobs:
     runs-on: ubuntu-latest
     env:
       SITE_URL: ${{ vars.SITE_URL }}
+      SFTP_PROTOCOL: ${{ vars.SFTP_PROTOCOL || 'sftp' }}
       SFTP_HOST: ${{ vars.SFTP_HOST }}
-      SFTP_PORT: ${{ vars.SFTP_PORT || '22' }}
+      SFTP_PORT: ${{ vars.SFTP_PORT }}
       SFTP_USER: ${{ vars.SFTP_USER }}
       SFTP_REMOTE_DIR: ${{ vars.SFTP_REMOTE_DIR }}
       SFTP_DELETE: ${{ vars.SFTP_DELETE }}
+      FTP_VERIFY_CERT: ${{ vars.FTP_VERIFY_CERT }}
       SFTP_KNOWN_HOSTS: ${{ secrets.SFTP_KNOWN_HOSTS }}
       SFTP_KEY: ${{ secrets.SFTP_KEY }}
       LFTP_PASSWORD: ${{ secrets.SFTP_PASSWORD }}
     steps:
       - name: Controlla la configurazione
         run: |
+          case "$SFTP_PROTOCOL" in
+            sftp|ftps|ftp) ;;
+            *) echo "SFTP_PROTOCOL non valido: $SFTP_PROTOCOL (usa sftp, ftps o ftp)" >&2; exit 1 ;;
+          esac
           missing=""
-          for v in SITE_URL SFTP_HOST SFTP_USER SFTP_REMOTE_DIR SFTP_KNOWN_HOSTS; do
+          for v in SITE_URL SFTP_HOST SFTP_USER SFTP_REMOTE_DIR; do
             [ -n "${!v}" ] || missing="$missing $v"
           done
-          [ -n "$SFTP_KEY$LFTP_PASSWORD" ] || missing="$missing SFTP_KEY/SFTP_PASSWORD"
+          if [ "$SFTP_PROTOCOL" = sftp ]; then
+            [ -n "$SFTP_KNOWN_HOSTS" ] || missing="$missing SFTP_KNOWN_HOSTS"
+            [ -n "$SFTP_KEY$LFTP_PASSWORD" ] || missing="$missing SFTP_KEY/SFTP_PASSWORD"
+          else
+            [ -n "$LFTP_PASSWORD" ] || missing="$missing SFTP_PASSWORD"
+          fi
           if [ -n "$missing" ]; then
             echo "Configurazione mancante:$missing" >&2
             exit 1
@@ -50,6 +62,7 @@ jobs:
         run: sudo apt-get update -q && sudo apt-get install -y -q lftp
 
       - name: Configura SSH
+        if: env.SFTP_PROTOCOL == 'sftp'
         run: |
           install -m 700 -d ~/.ssh
           printf '%s\n' "$SFTP_KNOWN_HOSTS" > ~/.ssh/known_hosts
@@ -63,8 +76,19 @@ jobs:
       # cancellati dal server i file che non esistono più nel sito.
       - name: Carica i file
         run: |
-          ssh_cmd="ssh -a -x -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$HOME/.ssh/known_hosts"
-          [ -n "$SFTP_KEY" ] && ssh_cmd="$ssh_cmd -o IdentitiesOnly=yes -i $HOME/.ssh/deploy_key"
+          case "$SFTP_PROTOCOL" in
+            sftp)
+              ssh_cmd="ssh -a -x -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$HOME/.ssh/known_hosts"
+              [ -n "$SFTP_KEY" ] && ssh_cmd="$ssh_cmd -o IdentitiesOnly=yes -i $HOME/.ssh/deploy_key"
+              settings="set sftp:auto-confirm no; set sftp:connect-program \"$ssh_cmd\""
+              url="sftp://$SFTP_HOST:${SFTP_PORT:-22}" ;;
+            ftps)
+              settings="set ftp:ssl-force true; set ftp:ssl-protect-data true; set ssl:verify-certificate ${FTP_VERIFY_CERT:-yes}"
+              url="ftp://$SFTP_HOST:${SFTP_PORT:-21}" ;;
+            ftp)
+              settings="set ftp:ssl-allow false"
+              url="ftp://$SFTP_HOST:${SFTP_PORT:-21}" ;;
+          esac
           auth="-u $SFTP_USER,"
           [ -n "$LFTP_PASSWORD" ] && auth="--env-password -u $SFTP_USER"
           delete=""
@@ -72,9 +96,9 @@ jobs:
           lftp <<LFTP
           set cmd:fail-exit yes
           set net:max-retries 2
-          set sftp:auto-confirm no
-          set sftp:connect-program "$ssh_cmd"
-          open $auth -p $SFTP_PORT sftp://$SFTP_HOST
+          set ftp:passive-mode true
+          $settings
+          open $auth $url
           mirror --reverse --ignore-time --parallel=4 --verbose $delete _site/ "$SFTP_REMOTE_DIR"
           lcd _site
           cd "$SFTP_REMOTE_DIR"
