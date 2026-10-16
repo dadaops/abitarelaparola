@@ -1,6 +1,8 @@
 name: Pubblica via SFTP/FTP
 
-# Spento finché la variabile del repo SFTP_ENABLED non vale "true".
+# Spento finché la variabile del repo SFTP_ENABLED non vale "true" (deve essere una variabile,
+# non un secret: GitHub non legge i secret nella condizione del job). Gli altri valori sono
+# letti sia dalle variabili sia dai secret.
 # SFTP_PROTOCOL sceglie il protocollo: sftp (predefinito), ftps o ftp.
 # Configurazione richiesta: vedi README.md, sezione «Pubblicazione su un server remoto».
 on:
@@ -20,14 +22,14 @@ jobs:
     if: vars.SFTP_ENABLED == 'true'
     runs-on: ubuntu-latest
     env:
-      SITE_URL: ${{ vars.SITE_URL }}
-      SFTP_PROTOCOL: ${{ vars.SFTP_PROTOCOL || 'sftp' }}
-      SFTP_HOST: ${{ vars.SFTP_HOST }}
-      SFTP_PORT: ${{ vars.SFTP_PORT }}
-      SFTP_USER: ${{ vars.SFTP_USER }}
-      SFTP_REMOTE_DIR: ${{ vars.SFTP_REMOTE_DIR }}
-      SFTP_DELETE: ${{ vars.SFTP_DELETE }}
-      FTP_VERIFY_CERT: ${{ vars.FTP_VERIFY_CERT }}
+      SITE_URL: ${{ vars.SITE_URL || secrets.SITE_URL }}
+      SFTP_PROTOCOL: ${{ vars.SFTP_PROTOCOL || secrets.SFTP_PROTOCOL || 'sftp' }}
+      SFTP_HOST: ${{ vars.SFTP_HOST || secrets.SFTP_HOST }}
+      SFTP_PORT: ${{ vars.SFTP_PORT || secrets.SFTP_PORT }}
+      SFTP_USER: ${{ vars.SFTP_USER || secrets.SFTP_USER }}
+      SFTP_REMOTE_DIR: ${{ vars.SFTP_REMOTE_DIR || secrets.SFTP_REMOTE_DIR }}
+      SFTP_DELETE: ${{ vars.SFTP_DELETE || secrets.SFTP_DELETE }}
+      FTP_VERIFY_CERT: ${{ vars.FTP_VERIFY_CERT || secrets.FTP_VERIFY_CERT }}
       SFTP_KNOWN_HOSTS: ${{ secrets.SFTP_KNOWN_HOSTS }}
       SFTP_KEY: ${{ secrets.SFTP_KEY }}
       LFTP_PASSWORD: ${{ secrets.SFTP_PASSWORD }}

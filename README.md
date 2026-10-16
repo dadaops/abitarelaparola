@@ -87,7 +87,8 @@ Il workflow `sftp.yml` costruisce il sito con l'indirizzo `SITE_URL` e lo carica
 a ogni push su `main`. È spento finché la variabile `SFTP_ENABLED` non vale `true`.
 
 Variabili e secret si impostano in GitHub: repo → Settings → Secrets and variables → Actions,
-schede **Variables** e **Secrets**. I dati sensibili vanno sempre tra i **Secrets**.
+schede **Variables** e **Secrets**. I dati sensibili vanno sempre tra i **Secrets**. `SFTP_ENABLED` deve stare
+tra le **Variables**; gli altri valori non sensibili funzionano in entrambe le schede.
 
 | Nome | Tipo | Obbligatorio | Valore |
 |---|---|---|---|
