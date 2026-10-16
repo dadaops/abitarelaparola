@@ -98,6 +98,21 @@ jobs:
               url="sftp://$SFTP_HOST:${SFTP_PORT:-22}" ;;
             ftps)
               settings="set ftp:ssl-force true; set ftp:ssl-protect-data true; set ssl:verify-certificate ${FTP_VERIFY_CERT:-yes}"
+              # Alcuni server (es. Tophost) non inviano il certificato intermedio: lo si scarica
+              # dall'indirizzo indicato nel certificato e lo si usa solo se firmato da una CA fidata.
+              ca="$RUNNER_TEMP/ca.pem"
+              cp /etc/ssl/certs/ca-certificates.crt "$ca"
+              issuer_url="$(echo | openssl s_client -starttls ftp -connect "$SFTP_HOST:${SFTP_PORT:-21}" -servername "$SFTP_HOST" 2>/dev/null \
+                | openssl x509 -noout -ext authorityInfoAccess 2>/dev/null | sed -n 's/.*CA Issuers - URI:\(.*\)/\1/p' | head -1)"
+              if [ -n "$issuer_url" ] && curl -fsS -m 20 "$issuer_url" -o "$RUNNER_TEMP/issuer.crt"; then
+                openssl x509 -inform DER -in "$RUNNER_TEMP/issuer.crt" -out "$RUNNER_TEMP/issuer.pem" 2>/dev/null \
+                  || openssl x509 -in "$RUNNER_TEMP/issuer.crt" -out "$RUNNER_TEMP/issuer.pem"
+                if openssl verify -CAfile /etc/ssl/certs/ca-certificates.crt "$RUNNER_TEMP/issuer.pem"; then
+                  cat "$RUNNER_TEMP/issuer.pem" >> "$ca"
+                  echo "Aggiunto il certificato intermedio da $issuer_url"
+                fi
+              fi
+              settings="$settings; set ssl:ca-file $ca"
               url="ftp://$SFTP_HOST:${SFTP_PORT:-21}" ;;
             ftp)
               settings="set ftp:ssl-allow false"
