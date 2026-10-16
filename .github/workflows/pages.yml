@@ -1,5 +1,6 @@
 name: Pubblica su GitHub Pages
 
+# Per spegnerlo senza modificare il file: variabile del repo PAGES_ENABLED=false.
 on:
   push:
     branches: [main]
@@ -16,6 +17,7 @@ concurrency:
 
 jobs:
   build:
+    if: vars.PAGES_ENABLED != 'false'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -23,25 +25,12 @@ jobs:
       - id: pages
         uses: actions/configure-pages@v5
 
-      # Sostituisce __SITE_URL__ con l'indirizzo reale di Pages: oggi
-      # https://dadaops.dev/abitarelaparola, dopo il collegamento del dominio
-      # https://abitarelaparola.it. Basta rilanciare il workflow per aggiornarlo.
+      # L'indirizzo è quello di Pages: oggi https://dadaops.dev/abitarelaparola,
+      # dopo il collegamento del dominio https://abitarelaparola.it.
       - name: Prepara il sito
         env:
           BASE_URL: ${{ steps.pages.outputs.base_url }}
-        run: |
-          site_url="${BASE_URL%/}"
-          site_url="https://${site_url#*://}"
-          echo "Indirizzo del sito: $site_url"
-          mkdir _site
-          cp -R index.html assets robots.txt sitemap.xml _site/
-          lastmod="$(git log -1 --format=%cs)"
-          sed -i -e "s|__SITE_URL__|$site_url|g" -e "s|__LASTMOD__|$lastmod|g" \
-            _site/index.html _site/robots.txt _site/sitemap.xml
-          if grep -rl -e __SITE_URL__ -e __LASTMOD__ _site; then
-            echo "Segnaposto non sostituiti" >&2
-            exit 1
-          fi
+        run: scripts/build.sh "https://${BASE_URL#*://}" _site
 
       - uses: actions/upload-pages-artifact@v4
         with:

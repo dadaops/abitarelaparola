@@ -1,0 +1,83 @@
+name: Pubblica via SFTP
+
+# Spento finché la variabile del repo SFTP_ENABLED non vale "true".
+# Configurazione richiesta: vedi README.md, sezione «Pubblicazione via SFTP».
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sftp
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: vars.SFTP_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    env:
+      SITE_URL: ${{ vars.SITE_URL }}
+      SFTP_HOST: ${{ vars.SFTP_HOST }}
+      SFTP_PORT: ${{ vars.SFTP_PORT || '22' }}
+      SFTP_USER: ${{ vars.SFTP_USER }}
+      SFTP_REMOTE_DIR: ${{ vars.SFTP_REMOTE_DIR }}
+      SFTP_DELETE: ${{ vars.SFTP_DELETE }}
+      SFTP_KNOWN_HOSTS: ${{ secrets.SFTP_KNOWN_HOSTS }}
+      SFTP_KEY: ${{ secrets.SFTP_KEY }}
+      LFTP_PASSWORD: ${{ secrets.SFTP_PASSWORD }}
+    steps:
+      - name: Controlla la configurazione
+        run: |
+          missing=""
+          for v in SITE_URL SFTP_HOST SFTP_USER SFTP_REMOTE_DIR SFTP_KNOWN_HOSTS; do
+            [ -n "${!v}" ] || missing="$missing $v"
+          done
+          [ -n "$SFTP_KEY$LFTP_PASSWORD" ] || missing="$missing SFTP_KEY/SFTP_PASSWORD"
+          if [ -n "$missing" ]; then
+            echo "Configurazione mancante:$missing" >&2
+            exit 1
+          fi
+
+      - uses: actions/checkout@v5
+
+      - name: Prepara il sito
+        run: scripts/build.sh "$SITE_URL" _site
+
+      - name: Installa lftp
+        run: sudo apt-get update -q && sudo apt-get install -y -q lftp
+
+      - name: Configura SSH
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$SFTP_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          if [ -n "$SFTP_KEY" ]; then
+            printf '%s\n' "$SFTP_KEY" > ~/.ssh/deploy_key
+            chmod 600 ~/.ssh/deploy_key
+          fi
+
+      # I file di testo vengono sempre ricaricati; gli altri solo se cambiano dimensione,
+      # perché il checkout azzera le date di modifica. Con SFTP_DELETE=true vengono
+      # cancellati dal server i file che non esistono più nel sito.
+      - name: Carica i file
+        run: |
+          ssh_cmd="ssh -a -x -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$HOME/.ssh/known_hosts"
+          [ -n "$SFTP_KEY" ] && ssh_cmd="$ssh_cmd -o IdentitiesOnly=yes -i $HOME/.ssh/deploy_key"
+          auth="-u $SFTP_USER,"
+          [ -n "$LFTP_PASSWORD" ] && auth="--env-password -u $SFTP_USER"
+          delete=""
+          [ "$SFTP_DELETE" = "true" ] && delete="--delete"
+          lftp <<LFTP
+          set cmd:fail-exit yes
+          set net:max-retries 2
+          set sftp:auto-confirm no
+          set sftp:connect-program "$ssh_cmd"
+          open $auth -p $SFTP_PORT sftp://$SFTP_HOST
+          mirror --reverse --ignore-time --parallel=4 --verbose $delete _site/ "$SFTP_REMOTE_DIR"
+          lcd _site
+          cd "$SFTP_REMOTE_DIR"
+          mput index.html robots.txt sitemap.xml
+          bye
+          LFTP
