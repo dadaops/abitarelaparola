@@ -12,6 +12,7 @@ Landing page del corso di formazione «Abitare la parola» (Palermo, 7–8 novem
 | `.github/workflows/pages.yml` | Pubblica il sito su GitHub Pages a ogni push su `main` |
 | `.github/workflows/pages-redirect.yml` | Al posto del sito, pubblica su GitHub Pages un reindirizzamento al sito definitivo (spento finché non è configurato) |
 | `.github/workflows/sftp.yml` | Pubblica via SFTP, FTPS o FTP su un server a ogni push su `main` (spento finché non è configurato) |
+| `.github/workflows/release-zip.yml` | Crea nelle Releases uno zip del sito da caricare a mano via FTP |
 
 Nei file di `site/` l'indirizzo del sito compare come `__SITE_URL__`: non va scritto a mano, lo inserisce
 `scripts/build.sh` al momento della pubblicazione. Per un'anteprima locale con gli indirizzi sostituiti:
@@ -81,6 +82,21 @@ e poi `gh workflow run pages.yml --repo dadaops/abitarelaparola`.
 Il vecchio indirizzo https://dadaops.dev/abitarelaparola/ dovrebbe reindirizzare al nuovo dominio: verificalo dopo il passaggio.
 Infine aggiungi https://abitarelaparola.it/ a Google Search Console e invia `https://abitarelaparola.it/sitemap.xml`.
 
+## Zip da caricare a mano
+
+A ogni push su `main` che modifica `site/`, il workflow `release-zip.yml` crea una release con lo zip del sito
+già pronto (indirizzi inseriti, nessun segnaposto). Si può lanciare anche a mano, indicando l'indirizzo del sito:
+
+```bash
+gh workflow run release-zip.yml --repo dadaops/abitarelaparola -f site_url=https://www.abitarelaparola.it
+gh release download --repo dadaops/abitarelaparola --pattern '*.zip'
+```
+
+Lo zip si trova anche nella pagina Releases del repo. Va estratto e il suo contenuto (`index.html`, `assets/`,
+`robots.txt`, `sitemap.xml`) caricato con FileZilla nella cartella pubblica del server, sovrascrivendo i file.
+L'indirizzo usato è, in ordine: quello indicato all'avvio, `SITE_URL`, `https://abitarelaparola.it`.
+Vengono conservate le ultime 10 release del sito.
+
 ## Pubblicazione su un server remoto (SFTP, FTPS o FTP)
 
 Il workflow `sftp.yml` costruisce il sito con l'indirizzo `SITE_URL` e lo carica con `lftp` nella cartella remota
@@ -112,7 +128,8 @@ I dati di accesso sono nell'email di attivazione dell'hosting e nel pannello di 
 
 1. Recupera dal pannello o dall'email: server FTP (di solito `ftp.abitarelaparola.it`), utente e password FTP.
    Nel pannello Tophost **abilita l'accesso FTP dall'estero**: i server di GitHub Actions sono negli Stati Uniti
-   e, senza questa opzione, la connessione va in timeout (il workflow lo segnala nel passo «Verifica che il server
+   e, senza questa opzione, la connessione va in timeout. Anche con l'opzione attiva Tophost può rifiutare alcuni
+   indirizzi di GitHub: se il workflow fallisce in modo intermittente, rilancialo o usa lo zip da caricare a mano (il workflow lo segnala nel passo «Verifica che il server
    sia raggiungibile»).
    Il certificato FTPS di Tophost è intestato a `*.th.seeweb.it`, non a `ftp.abitarelaparola.it`: come `SFTP_HOST`
    usa il nome del server a cui punta `ftp.abitarelaparola.it` (oggi `w-10.th.seeweb.it`, si ricava con

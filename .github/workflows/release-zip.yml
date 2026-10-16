@@ -1,0 +1,70 @@
+name: Crea lo zip del sito nelle Releases
+
+# Produce uno zip pronto da caricare a mano via FTP: il contenuto va estratto nella cartella
+# pubblica del server. L'indirizzo inserito nel sito è SITE_URL (variabile o secret) oppure
+# quello indicato all'avvio manuale. Vengono conservate le ultime 10 release del sito.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'site/**'
+      - 'scripts/build.sh'
+  workflow_dispatch:
+    inputs:
+      site_url:
+        description: "Indirizzo del sito (vuoto = SITE_URL o https://abitarelaparola.it)"
+        required: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-zip
+  cancel-in-progress: false
+
+jobs:
+  zip:
+    runs-on: ubuntu-latest
+    env:
+      SITE_URL: ${{ inputs.site_url || vars.SITE_URL || secrets.SITE_URL || 'https://abitarelaparola.it' }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Prepara il sito
+        run: scripts/build.sh "$SITE_URL" _site
+
+      - name: Crea lo zip
+        id: zip
+        run: |
+          stamp="$(TZ=Europe/Rome date +%Y%m%d-%H%M)"
+          short="$(git rev-parse --short HEAD)"
+          name="abitare-la-parola-sito-$stamp-$short.zip"
+          (cd _site && zip -r -X -q "../$name" .)
+          unzip -l "$name"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          echo "tag=sito-$stamp-$short" >> "$GITHUB_OUTPUT"
+          echo "title=Sito $(TZ=Europe/Rome date '+%d/%m/%Y %H:%M') ($short)" >> "$GITHUB_OUTPUT"
+
+      - name: Pubblica la release
+        env:
+          NAME: ${{ steps.zip.outputs.name }}
+          TAG: ${{ steps.zip.outputs.tag }}
+          TITLE: ${{ steps.zip.outputs.title }}
+        run: |
+          notes="$(printf '%s\n' \
+            "Sito pronto da caricare via FTP, preparato per l'indirizzo $SITE_URL." \
+            "" \
+            "1. Scarica $NAME ed estrailo." \
+            "2. Carica tutto il contenuto estratto (index.html, assets/, robots.txt, sitemap.xml) nella cartella pubblica del server, sovrascrivendo i file esistenti." \
+            "" \
+            "Commit: $GITHUB_SHA")"
+          gh release create "$TAG" "$NAME" --title "$TITLE" --notes "$notes" --target "$GITHUB_SHA" --latest
+
+      - name: Conserva solo le ultime 10 release del sito
+        run: |
+          gh release list --limit 100 --json tagName,createdAt \
+            --jq '[.[] | select(.tagName | startswith("sito-"))] | sort_by(.createdAt) | reverse | .[10:] | .[].tagName' |
+          while read -r tag; do
+            gh release delete "$tag" --yes --cleanup-tag
+          done
