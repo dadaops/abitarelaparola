@@ -111,6 +111,13 @@ Il piano TopWeb offre accesso FTP ma non SFTP né SSH, quindi si usa `ftps` e, s
 I dati di accesso sono nell'email di attivazione dell'hosting e nel pannello di controllo Tophost.
 
 1. Recupera dal pannello o dall'email: server FTP (di solito `ftp.abitarelaparola.it`), utente e password FTP.
+   Nel pannello Tophost **abilita l'accesso FTP dall'estero**: i server di GitHub Actions sono negli Stati Uniti
+   e, senza questa opzione, la connessione va in timeout (il workflow lo segnala nel passo «Verifica che il server
+   sia raggiungibile»).
+   Il certificato FTPS di Tophost è intestato a `*.th.seeweb.it`, non a `ftp.abitarelaparola.it`: come `SFTP_HOST`
+   usa il nome del server a cui punta `ftp.abitarelaparola.it` (oggi `w-10.th.seeweb.it`, si ricava con
+   `dig +short ftp.abitarelaparola.it`), così la cifratura resta verificata. In alternativa `FTP_VERIFY_CERT=no`,
+   che però non verifica l'identità del server.
 2. Collegati una volta con FileZilla per capire in quale cartella va il sito: è quella che contiene la pagina
    predefinita di Tophost (`index.html` o `index.php`). Se i file sono direttamente nella radice, la cartella è `/`.
 3. Imposta i valori, sostituendo quelli tra `< >`:
@@ -138,7 +145,10 @@ I dati di accesso sono nell'email di attivazione dell'hosting e nel pannello di 
    - Se fallisce la connessione, verifica con Tophost che l'FTP accetti accessi da qualsiasi IP:
      i server di GitHub Actions cambiano indirizzo a ogni esecuzione.
 5. Verifica che il sito risponda su `https://abitarelaparola.it` e che il certificato HTTPS sia attivo
-   (da attivare nel pannello Tophost, se non è automatico).
+   (da attivare nel pannello Tophost, se non è automatico). Tophost reindirizza `abitarelaparola.it` a
+   `www.abitarelaparola.it`: `SITE_URL` deve essere l'indirizzo finale che resta nella barra del browser.
+   **Non attivare `PAGES_REDIRECT_TO` finché questo controllo non passa**, altrimenti i link a
+   dadaops.dev/abitarelaparola portano a una pagina in errore.
 6. Con il sito su Tophost, i DNS del dominio restano quelli di Tophost: **non** seguire i passi
    «Passaggio al dominio abitarelaparola.it» della sezione GitHub Pages. Segui invece
    «Dismettere dadaops.dev/abitarelaparola», per non avere due copie della pagina indicizzate.
