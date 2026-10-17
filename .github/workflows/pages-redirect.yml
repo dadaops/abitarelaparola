@@ -1,7 +1,7 @@
 name: Reindirizza GitHub Pages al sito definitivo
 
 # Attivo solo quando la variabile del repo PAGES_REDIRECT_TO contiene l'indirizzo del sito
-# definitivo (es. https://abitarelaparola.it). In quel caso pages.yml si ferma e questo
+# definitivo (es. https://www.abitarelaparola.it). In quel caso pages.yml si ferma e questo
 # workflow pubblica su GitHub Pages solo pagine di reindirizzamento.
 on:
   push:

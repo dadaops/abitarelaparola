@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Prepara il sito da pubblicare: copia site/ nella cartella di uscita e sostituisce
 # __SITE_URL__ e __LASTMOD__ in index.html, robots.txt e sitemap.xml.
-# Uso: scripts/build.sh https://abitarelaparola.it [cartella-di-uscita]
+# Uso: scripts/build.sh https://www.abitarelaparola.it [cartella-di-uscita]
 set -euo pipefail
 
 site_url="${1:?Indica l’indirizzo del sito, per esempio https://abitarelaparola.it}"

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Prepara una versione del sito che reindirizza ogni indirizzo verso il sito definitivo,
-# mantenendo il percorso: .../abitarelaparola/assets/x.pdf -> https://abitarelaparola.it/assets/x.pdf
-# Uso: scripts/build-redirect.sh https://abitarelaparola.it /abitarelaparola [cartella-di-uscita]
+# mantenendo il percorso: .../abitarelaparola/assets/x.pdf -> https://www.abitarelaparola.it/assets/x.pdf
+# Uso: scripts/build-redirect.sh https://www.abitarelaparola.it /abitarelaparola [cartella-di-uscita]
 set -euo pipefail
 
 target="${1:?Indica l’indirizzo del sito definitivo, per esempio https://abitarelaparola.it}"

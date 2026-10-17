@@ -12,7 +12,7 @@ on:
   workflow_dispatch:
     inputs:
       site_url:
-        description: "Indirizzo del sito (vuoto = SITE_URL o https://abitarelaparola.it)"
+        description: "Indirizzo del sito (vuoto = SITE_URL o https://www.abitarelaparola.it)"
         required: false
 
 permissions:
@@ -26,7 +26,7 @@ jobs:
   zip:
     runs-on: ubuntu-latest
     env:
-      SITE_URL: ${{ inputs.site_url || vars.SITE_URL || secrets.SITE_URL || 'https://abitarelaparola.it' }}
+      SITE_URL: ${{ inputs.site_url || vars.SITE_URL || secrets.SITE_URL || 'https://www.abitarelaparola.it' }}
       GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v5

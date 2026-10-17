@@ -26,8 +26,7 @@ jobs:
       - id: pages
         uses: actions/configure-pages@v5
 
-      # L'indirizzo è quello di Pages: oggi https://dadaops.dev/abitarelaparola,
-      # dopo il collegamento del dominio https://abitarelaparola.it.
+      # L'indirizzo inserito nel sito è quello assegnato da GitHub Pages al repo.
       - name: Prepara il sito
         env:
           BASE_URL: ${{ steps.pages.outputs.base_url }}
