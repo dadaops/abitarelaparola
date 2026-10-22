@@ -60,6 +60,22 @@ jobs:
       - name: Prepara il sito
         run: scripts/build.sh "$SITE_URL" _site
 
+      # Collegamento al foglio Google per il modulo di iscrizione: URL e token restano nei secret
+      # e finiscono solo nel file caricato sul server, mai nel repo o nello zip delle Releases.
+      - name: Configura il modulo di iscrizione
+        env:
+          GOOGLE_SCRIPT_URL: ${{ secrets.GOOGLE_SCRIPT_URL }}
+          GOOGLE_SCRIPT_TOKEN: ${{ secrets.GOOGLE_SCRIPT_TOKEN }}
+        run: |
+          if [ -z "$GOOGLE_SCRIPT_URL" ]; then
+            echo "GOOGLE_SCRIPT_URL non impostato: le iscrizioni vengono salvate solo sull'hosting"
+            exit 0
+          fi
+          [[ "$GOOGLE_SCRIPT_URL" =~ ^https://script\.google\.com/macros/s/[A-Za-z0-9_-]+/exec$ ]] || { echo "GOOGLE_SCRIPT_URL non valido" >&2; exit 1; }
+          [[ "$GOOGLE_SCRIPT_TOKEN" =~ ^[A-Za-z0-9]{32,128}$ ]] || { echo "GOOGLE_SCRIPT_TOKEN mancante o non valido" >&2; exit 1; }
+          printf "<?php\nreturn [\n    'google_url' => '%s',\n    'google_token' => '%s',\n];\n" "$GOOGLE_SCRIPT_URL" "$GOOGLE_SCRIPT_TOKEN" > _site/api/config.php
+          echo "Modulo collegato al foglio Google"
+
       - name: Installa lftp
         run: sudo apt-get update -q && sudo apt-get install -y -q lftp
 
@@ -85,7 +101,7 @@ jobs:
           fi
           echo "Porta $port raggiungibile"
 
-      # I file di testo vengono sempre ricaricati; gli altri solo se cambiano dimensione,
+      # Le pagine e gli altri file di testo vengono sempre ricaricati; gli altri solo se cambiano dimensione,
       # perché il checkout azzera le date di modifica. Con SFTP_DELETE=true vengono
       # cancellati dal server i file che non esistono più nel sito.
       - name: Carica i file
@@ -122,6 +138,9 @@ jobs:
           [ -n "$LFTP_PASSWORD" ] && auth="--env-password -u $SFTP_USER"
           delete=""
           [ "$SFTP_DELETE" = "true" ] && delete="--delete"
+          # File di testo (pagine, PHP, robots, sitemap): ricaricati sempre, anche se la dimensione non cambia
+          testo="$(cd _site && find . -type f \( -name '*.html' -o -name '*.php' -o -name '*.txt' -o -name '*.xml' \) | sed 's|^\./||' |
+            while read -r f; do d="$(dirname "$f")"; [ "$d" = . ] && d=""; printf 'put -O "%s/%s" "_site/%s"\n' "${SFTP_REMOTE_DIR%/}" "$d" "$f"; done)"
           lftp <<LFTP
           set cmd:fail-exit yes
           set net:max-retries 2
@@ -131,8 +150,6 @@ jobs:
           $settings
           open $auth $url
           mirror --reverse --ignore-time --parallel=4 --verbose $delete _site/ "$SFTP_REMOTE_DIR"
-          lcd _site
-          cd "$SFTP_REMOTE_DIR"
-          mput index.html robots.txt sitemap.xml
+          $testo
           bye
           LFTP

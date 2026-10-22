@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Prepara il sito da pubblicare: copia site/ nella cartella di uscita e sostituisce
-# __SITE_URL__ e __LASTMOD__ in index.html, robots.txt e sitemap.xml.
+# __SITE_URL__ e __LASTMOD__ nelle pagine HTML, in robots.txt e in sitemap.xml.
 # Uso: scripts/build.sh https://www.abitarelaparola.it [cartella-di-uscita]
 set -euo pipefail
 
@@ -24,9 +24,9 @@ mkdir -p "$out"
 cp -R "$root/site/." "$out/"
 find "$out" -name .DS_Store -delete
 
-for f in index.html robots.txt sitemap.xml; do
-  sed -i.bak -e "s|__SITE_URL__|$site_url|g" -e "s|__LASTMOD__|$lastmod|g" "$out/$f"
-  rm "$out/$f.bak"
+find "$out" -type f \( -name '*.html' -o -name robots.txt -o -name sitemap.xml \) | while read -r f; do
+  sed -i.bak -e "s|__SITE_URL__|$site_url|g" -e "s|__LASTMOD__|$lastmod|g" "$f"
+  rm "$f.bak"
 done
 
 if grep -rl -e __SITE_URL__ -e __LASTMOD__ "$out"; then

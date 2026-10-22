@@ -10,6 +10,9 @@ Sito pubblico: https://www.abitarelaparola.it, ospitato su Tophost (piano TopWeb
 | Percorso | Contenuto |
 |---|---|
 | `site/` | Il sito pubblicato: `index.html`, `assets/`, `robots.txt`, `sitemap.xml` |
+| `site/iscrizione/` | Modulo di iscrizione (alternativa al modulo Google) |
+| `site/api/iscrizione.php` | Riceve le iscrizioni: le salva sull'hosting e le inoltra al foglio Google |
+| `google-apps-script/Codice.gs` | Script da incollare nel foglio Google che riceve le iscrizioni (non pubblicato sul sito) |
 | `scripts/build.sh` | Copia `site/` in `_site/` e sostituisce i segnaposto con l'indirizzo reale |
 | `scripts/build-redirect.sh` | Prepara le pagine che reindirizzano al sito definitivo |
 | `.github/workflows/sftp.yml` | Pubblica il sito su Tophost via FTPS a ogni push su `main` |
@@ -23,6 +26,60 @@ Nei file di `site/` l'indirizzo del sito compare come `__SITE_URL__`: non va scr
 ```bash
 scripts/build.sh https://www.abitarelaparola.it _site
 ```
+
+## Modulo di iscrizione
+
+`https://www.abitarelaparola.it/iscrizione/` sostituisce il modulo Google con gli stessi campi, in quattro passi brevi
+(contatti, profilo, partecipazione, pagamento). Non è indicizzato (`noindex`) e i pulsanti della landing puntano
+ancora al modulo Google finché non si decide di passare al nuovo.
+
+Ogni invio viene salvato in due posti:
+
+1. **Sull'hosting Tophost**: una riga in `iscrizioni.csv` (separatore `;`, si apre con Excel) e la ricevuta in
+   `ricevute/`, dentro la cartella `dati-iscrizioni` creata dal PHP fuori dalla parte pubblica del sito. Se l'hosting
+   non lo consente, la cartella è dentro il sito con un nome casuale (`dati-iscrizioni-…`, indicato in
+   `api/.cartella-dati.php`) e protetta da `.htaccess`. Si scarica con FileZilla.
+2. **Nel foglio Google**, se collegato: una riga per iscrizione e le ricevute in una cartella di Drive, con il link
+   nel foglio.
+
+Cosa fa in più rispetto al modulo Google:
+
+- **Contatti salvati subito**: dopo il primo passo (con consenso) l'iscrizione viene registrata come `parziale`;
+  chi non completa può essere ricontattato. L'invio finale aggiorna la stessa riga a `completa`.
+- **Bozza nel browser**: le risposte restano salvate sul dispositivo; chi torna riprende da dove era rimasto.
+- **Meno attrito**: email corretta al volo (`gmial.com` → `gmail.com`), campi «Altro» solo se servono, anni di
+  professione facoltativi per studenti e genitori, IBAN e causale da copiare, ricevuta caricabile subito o da
+  inviare più tardi via email.
+- **Dopo l'invio**: codice di iscrizione, prossimi passi, invito a un collega su WhatsApp e promemoria nel calendario.
+- **Misurazione**: provenienza (UTM e referrer) salvata con l'iscrizione; eventi Analytics `form_iniziato`,
+  `lead_contatti`, `form_passo`, `form_pagamento_scelto`, `form_errore`, `iscrizione_inviata` (da segnare come evento
+  chiave), `form_invio_fallito`, `invito_collega`, `aggiungi_calendario`.
+- **Anti-spam**: campo nascosto per i bot e tempo minimo di compilazione.
+
+La data di chiusura è la costante `CHIUSURA` nello script della pagina: dopo quella data il modulo mostra «iscrizioni
+chiuse» (si può comunque vedere aggiungendo `?anteprima` all'indirizzo).
+
+### Collegare il foglio Google
+
+1. Crea un foglio Google, per esempio «Abitare la parola – Iscrizioni», e apri **Estensioni → Apps Script**.
+2. Sostituisci il codice con il contenuto di `google-apps-script/Codice.gs` e salva.
+3. Scegli la funzione `configura` ed esegui. Autorizza l'accesso richiesto (foglio e Drive). Nel **Registro di
+   esecuzione** compare il token: copialo.
+4. **Esegui il deployment → Nuovo deployment → App web**: «Esegui come» **Me**, «Chi ha accesso» **Chiunque**.
+   Copia l'URL che termina con `/exec`.
+5. Salva i due valori nei secret del repo e ripubblica:
+
+   ```bash
+   gh secret set GOOGLE_SCRIPT_URL   --repo dadaops/abitarelaparola   # incolla l'URL /exec
+   gh secret set GOOGLE_SCRIPT_TOKEN --repo dadaops/abitarelaparola   # incolla il token
+   gh workflow run sftp.yml --repo dadaops/abitarelaparola
+   ```
+
+Il workflow scrive `api/config.php` sul server con questi valori: non finiscono mai nel repo né nello zip delle
+Releases. Senza secret il modulo funziona lo stesso e salva solo sull'hosting. Se modifichi `Codice.gs`, crea una
+nuova versione del deployment (Gestisci deployment → Modifica → Nuova versione), così l'URL resta lo stesso.
+
+Verifica: `https://www.abitarelaparola.it/api/iscrizione.php` deve rispondere `{"ok":true,…,"google":true}`.
 
 ## Google Analytics
 
