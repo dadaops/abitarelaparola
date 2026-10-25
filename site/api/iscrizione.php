@@ -217,7 +217,20 @@ function iscrizioneAutorizzata(string $cartella, string $id, string $chiaveRicev
 // --- Richieste GET -------------------------------------------------------------------------------
 if ($_SERVER['REQUEST_METHOD'] === 'GET') {
     if (campo('azione', 20, $_GET) !== 'stato') {
-        rispondi(200, ['ok' => true, 'servizio' => 'iscrizioni', 'google' => $googleUrl !== '']);
+        $radice = realpath((string)($_SERVER['DOCUMENT_ROOT'] ?? '')) ?: dirname(__DIR__);
+        rispondi(200, [
+            'ok' => true,
+            'servizio' => 'iscrizioni',
+            'google' => $googleUrl !== '',
+            'recaptcha' => $recaptchaSegreto !== '',
+            'archivio' => str_starts_with($cartellaDati, $radice . '/') ? 'nel sito, cartella con nome casuale' : 'fuori dalla parte pubblica',
+            'ricodifica_jpg' => function_exists('imagecreatefromjpeg'),
+            'antivirus' => scansioneAntivirus(__FILE__) === null && (bool)array_filter(['clamdscan', 'clamscan'], static function ($p) {
+                $t = [];
+                @exec('command -v ' . escapeshellarg($p) . ' 2>/dev/null', $t);
+                return (bool)$t;
+            }),
+        ]);
     }
     $d = iscrizioneAutorizzata($cartellaDati, campo('id', 40, $_GET), campo('chiave', 64, $_GET));
     rispondi(200, [
