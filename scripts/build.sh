@@ -15,6 +15,10 @@ case "$out" in
   ""|"/"|".") echo "Cartella di uscita non valida: $out" >&2; exit 1 ;;
 esac
 
+# Chiave pubblica reCAPTCHA v3 per il modulo di iscrizione (facoltativa, dalla variabile d'ambiente)
+recaptcha="${RECAPTCHA_SITE_KEY:-}"
+[[ -z "$recaptcha" || "$recaptcha" =~ ^[A-Za-z0-9_-]{30,60}$ ]] || { echo "RECAPTCHA_SITE_KEY non valida" >&2; exit 1; }
+
 root="$(cd "$(dirname "$0")/.." && pwd)"
 lastmod="$(git -C "$root" log -1 --format=%cs -- site 2>/dev/null || true)"
 lastmod="${lastmod:-$(date +%F)}"
@@ -25,11 +29,11 @@ cp -R "$root/site/." "$out/"
 find "$out" -name .DS_Store -delete
 
 find "$out" -type f \( -name '*.html' -o -name robots.txt -o -name sitemap.xml \) | while read -r f; do
-  sed -i.bak -e "s|__SITE_URL__|$site_url|g" -e "s|__LASTMOD__|$lastmod|g" "$f"
+  sed -i.bak -e "s|__SITE_URL__|$site_url|g" -e "s|__LASTMOD__|$lastmod|g" -e "s|__RECAPTCHA_SITE_KEY__|$recaptcha|g" "$f"
   rm "$f.bak"
 done
 
-if grep -rl -e __SITE_URL__ -e __LASTMOD__ "$out"; then
+if grep -rl -e __SITE_URL__ -e __LASTMOD__ -e __RECAPTCHA_SITE_KEY__ "$out"; then
   echo "Segnaposto non sostituiti nei file qui sopra" >&2
   exit 1
 fi

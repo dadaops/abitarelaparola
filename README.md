@@ -15,7 +15,10 @@ Sito pubblico: https://www.abitarelaparola.it, ospitato su Tophost (piano TopWeb
 | `google-apps-script/Codice.gs` | Script da incollare nel foglio Google che riceve le iscrizioni (non pubblicato sul sito) |
 | `scripts/build.sh` | Copia `site/` in `_site/` e sostituisce i segnaposto con l'indirizzo reale |
 | `scripts/build-redirect.sh` | Prepara le pagine che reindirizzano al sito definitivo |
+| `scripts/pubblica-ftp.sh` | Carica una cartella su Tophost via FTPS (usato dai workflow) |
+| `scripts/config-modulo.sh` | Scrive `api/config.php` del modulo dai secret (usato dai workflow) |
 | `.github/workflows/sftp.yml` | Pubblica il sito su Tophost via FTPS a ogni push su `main` |
+| `.github/workflows/prova-modulo.yml` | Pubblica il modulo sperimentale in una cartella segreta (ramo `form-iscrizione`) |
 | `.github/workflows/release-zip.yml` | Crea nelle Releases uno zip del sito da caricare a mano via FTP |
 | `.github/workflows/pages-redirect.yml` | Pubblica su GitHub Pages solo un reindirizzamento al sito definitivo |
 | `.github/workflows/pages.yml` | Pubblica il sito su GitHub Pages (oggi fermo, vedi «GitHub Pages») |
@@ -58,6 +61,34 @@ Ogni passo viene salvato in due posti:
 2. **Nel foglio Google**, se collegato: una riga per iscrizione, aggiornata a ogni passo senza cancellare i dati già
    presenti, e le ricevute in una cartella di Drive con il link nel foglio.
 
+**Sicurezza delle ricevute** (`site/api/controllo-file.php`): sono accettati solo **PDF e JPG**, riconosciuti dal contenuto
+reale del file e non dall'estensione (il browser lo controlla subito, il server lo ripete).
+
+- **PDF**: rifiutato se contiene contenuti attivi (JavaScript, avvio di programmi, file incorporati, moduli XFA, invio o
+  importazione di dati), cercati nella struttura del file, nei nomi scritti in esadecimale per eludere i controlli e negli
+  «object stream» compressi. Rifiutati anche i PDF danneggiati, cifrati in modo da non poter essere ispezionati e le
+  «bombe» di compressione. In tutti questi casi alla persona si chiede una foto JPG della ricevuta.
+- **JPG**: ricodificato da zero, così vengono eliminati dati nascosti o accodati (anche codice) e i metadati EXIF, come la
+  posizione GPS; l'orientamento della foto viene mantenuto.
+- **Antivirus**: se sul server è disponibile ClamAV ogni file viene anche scansionato. Su Tophost non lo è: restano i
+  controlli qui sopra, che bloccano tutto ciò che in un PDF può eseguire codice, e la scansione di Google Drive sulle
+  ricevute caricate nel foglio. Nessun controllo può garantire in assoluto l'assenza di virus.
+
+**reCAPTCHA v3** (invisibile, senza quiz): ogni passo del modulo ottiene un punteggio da Google, verificato dal server
+(azione corretta e punteggio di almeno 0,5). Si attiva così:
+
+1. Su [google.com/recaptcha/admin](https://www.google.com/recaptcha/admin) crea un sito di tipo **reCAPTCHA v3 (basato sul
+   punteggio)** con i domini `www.abitarelaparola.it` e `abitarelaparola.it`.
+2. Salva le due chiavi nel repo e ripubblica:
+
+   ```bash
+   gh variable set RECAPTCHA_SITE_KEY --repo dadaops/abitarelaparola --body '<chiave del sito>'
+   gh secret set RECAPTCHA_SECRET     --repo dadaops/abitarelaparola   # incolla la chiave segreta
+   ```
+
+Senza chiavi reCAPTCHA resta spento e restano il campo trappola e il tempo minimo di compilazione. reCAPTCHA usa cookie
+di Google: valutate se citarlo nell'informativa o nel banner dei cookie.
+
 Altri accorgimenti: bozza dei contatti salvata nel browser, email corretta al volo (`gmial.com` → `gmail.com`), IBAN e
 causale da copiare, anni di professione facoltativi per studenti e genitori, campo nascosto e tempo minimo contro i bot,
 provenienza (UTM e referrer) salvata con l'iscrizione, invito a un collega su WhatsApp e promemoria nel calendario.
@@ -68,6 +99,15 @@ Eventi Analytics: `form_iniziato`, `generate_lead` (passo 1), `begin_checkout`, 
 
 La scadenza è `CHIUSURA` nello script della pagina e `SCADENZA` in `Codice.gs`: dopo quella data non si possono fare nuove
 prenotazioni, ma il link personale continua a funzionare. Con `?anteprima` nell'indirizzo il modulo si apre anche dopo la scadenza.
+
+### Provare il modulo senza pubblicarlo
+
+Il workflow `prova-modulo.yml` pubblica **solo il modulo** (pagina e PHP) in una cartella segreta su Tophost a ogni push sul
+ramo `form-iscrizione`: `https://www.abitarelaparola.it/<PROVA_CARTELLA>/iscrizione/`. Il nome della cartella è nel secret
+`PROVA_CARTELLA` (non compare nei log pubblici delle Actions); la pagina non è collegata dal sito né indicizzata. La prova
+salva in un archivio separato (`dati-iscrizioni-prova`) e scrive nel foglio Google solo se sono impostati i secret di prova
+`GOOGLE_SCRIPT_URL_PROVA` e `GOOGLE_SCRIPT_TOKEN_PROVA` (conviene un foglio separato da quello vero). Per toglierla, cancella
+la cartella con FileZilla.
 
 ### Collegare il foglio Google
 

@@ -1,0 +1,64 @@
+name: Prova del modulo di iscrizione
+
+# Pubblica SOLO il modulo di iscrizione (pagina e PHP) in una cartella segreta su Tophost, per provarlo
+# senza toccare il sito: https://www.abitarelaparola.it/<PROVA_CARTELLA>/iscrizione/
+# Il nome della cartella è nel secret PROVA_CARTELLA, così non compare nei log pubblici delle Actions.
+# La prova usa un archivio separato (dati-iscrizioni-prova) e, se impostati, un foglio Google di prova
+# (GOOGLE_SCRIPT_URL_PROVA, GOOGLE_SCRIPT_TOKEN_PROVA). La pagina non è collegata dal sito né indicizzata.
+on:
+  push:
+    branches: [form-iscrizione]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sftp
+  cancel-in-progress: false
+
+jobs:
+  prova:
+    if: vars.SFTP_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    env:
+      SITE_URL: ${{ vars.SITE_URL || secrets.SITE_URL }}
+      PROVA_CARTELLA: ${{ secrets.PROVA_CARTELLA }}
+      SFTP_PROTOCOL: ${{ vars.SFTP_PROTOCOL || secrets.SFTP_PROTOCOL || 'sftp' }}
+      SFTP_HOST: ${{ vars.SFTP_HOST || secrets.SFTP_HOST }}
+      SFTP_PORT: ${{ vars.SFTP_PORT || secrets.SFTP_PORT }}
+      SFTP_USER: ${{ vars.SFTP_USER || secrets.SFTP_USER }}
+      SFTP_REMOTE_DIR: ${{ vars.SFTP_REMOTE_DIR || secrets.SFTP_REMOTE_DIR }}
+      FTP_VERIFY_CERT: ${{ vars.FTP_VERIFY_CERT || secrets.FTP_VERIFY_CERT }}
+      SFTP_KNOWN_HOSTS: ${{ secrets.SFTP_KNOWN_HOSTS }}
+      SFTP_KEY: ${{ secrets.SFTP_KEY }}
+      LFTP_PASSWORD: ${{ secrets.SFTP_PASSWORD }}
+    steps:
+      - name: Controlla la cartella di prova
+        run: |
+          [[ "$PROVA_CARTELLA" =~ ^prova-[a-z0-9]{12,40}$ ]] || { echo "Secret PROVA_CARTELLA mancante o non valido (es. prova-<lettere e numeri casuali>)" >&2; exit 1; }
+
+      - uses: actions/checkout@v5
+
+      - name: Prepara il modulo
+        env:
+          RECAPTCHA_SITE_KEY: ${{ vars.RECAPTCHA_SITE_KEY }}
+        run: |
+          scripts/build.sh "$SITE_URL" _site
+          mkdir _prova
+          cp -R _site/iscrizione _site/api _prova/
+          # Nella cartella di prova i link alla landing e alla brochure puntano al sito vero
+          sed -i -e 's|href="\.\./"|href="/"|g' -e 's|"\.\./assets/|"/assets/|g' _prova/iscrizione/index.html
+
+      - name: Configura il modulo di prova
+        env:
+          GOOGLE_SCRIPT_URL: ${{ secrets.GOOGLE_SCRIPT_URL_PROVA }}
+          GOOGLE_SCRIPT_TOKEN: ${{ secrets.GOOGLE_SCRIPT_TOKEN_PROVA }}
+          RECAPTCHA_SECRET: ${{ secrets.RECAPTCHA_SECRET }}
+        run: scripts/config-modulo.sh _prova/api/config.php "${SITE_URL%/}/$PROVA_CARTELLA" dati-iscrizioni-prova
+
+      - name: Installa lftp
+        run: sudo apt-get update -q && sudo apt-get install -y -q lftp
+
+      - name: Carica il modulo di prova
+        run: scripts/pubblica-ftp.sh _prova "${SFTP_REMOTE_DIR%/}/$PROVA_CARTELLA"

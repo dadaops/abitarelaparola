@@ -4,7 +4,8 @@ name: Pubblica via SFTP/FTP
 # non un secret: GitHub non legge i secret nella condizione del job). Gli altri valori sono
 # letti sia dalle variabili sia dai secret.
 # SFTP_PROTOCOL sceglie il protocollo: sftp (predefinito), ftps o ftp.
-# Configurazione richiesta: vedi README.md, sezione «Pubblicazione su un server remoto».
+# Configurazione richiesta: vedi README.md, sezione «Pubblicazione su Tophost».
+# Il caricamento è in scripts/pubblica-ftp.sh, condiviso con prova-modulo.yml.
 on:
   push:
     branches: [main]
@@ -34,125 +35,22 @@ jobs:
       SFTP_KEY: ${{ secrets.SFTP_KEY }}
       LFTP_PASSWORD: ${{ secrets.SFTP_PASSWORD }}
     steps:
-      - name: Controlla la configurazione
-        run: |
-          case "$SFTP_PROTOCOL" in
-            sftp|ftps|ftp) ;;
-            *) echo "SFTP_PROTOCOL non valido: $SFTP_PROTOCOL (usa sftp, ftps o ftp)" >&2; exit 1 ;;
-          esac
-          missing=""
-          for v in SITE_URL SFTP_HOST SFTP_USER SFTP_REMOTE_DIR; do
-            [ -n "${!v}" ] || missing="$missing $v"
-          done
-          if [ "$SFTP_PROTOCOL" = sftp ]; then
-            [ -n "$SFTP_KNOWN_HOSTS" ] || missing="$missing SFTP_KNOWN_HOSTS"
-            [ -n "$SFTP_KEY$LFTP_PASSWORD" ] || missing="$missing SFTP_KEY/SFTP_PASSWORD"
-          else
-            [ -n "$LFTP_PASSWORD" ] || missing="$missing SFTP_PASSWORD"
-          fi
-          if [ -n "$missing" ]; then
-            echo "Configurazione mancante:$missing" >&2
-            exit 1
-          fi
-
       - uses: actions/checkout@v5
 
       - name: Prepara il sito
+        env:
+          RECAPTCHA_SITE_KEY: ${{ vars.RECAPTCHA_SITE_KEY }}
         run: scripts/build.sh "$SITE_URL" _site
 
-      # Configurazione del modulo di iscrizione: indirizzo del sito (per i link personali) e collegamento
-      # al foglio Google. URL e token restano nei secret e finiscono solo nel file caricato sul server,
-      # mai nel repo o nello zip delle Releases.
       - name: Configura il modulo di iscrizione
         env:
           GOOGLE_SCRIPT_URL: ${{ secrets.GOOGLE_SCRIPT_URL }}
           GOOGLE_SCRIPT_TOKEN: ${{ secrets.GOOGLE_SCRIPT_TOKEN }}
-        run: |
-          [[ "$SITE_URL" =~ ^https?://[A-Za-z0-9.:-]+$ ]] || { echo "SITE_URL non valido" >&2; exit 1; }
-          if [ -n "$GOOGLE_SCRIPT_URL" ]; then
-            [[ "$GOOGLE_SCRIPT_URL" =~ ^https://script\.google\.com/macros/s/[A-Za-z0-9_-]+/exec$ ]] || { echo "GOOGLE_SCRIPT_URL non valido" >&2; exit 1; }
-            [[ "$GOOGLE_SCRIPT_TOKEN" =~ ^[A-Za-z0-9]{32,128}$ ]] || { echo "GOOGLE_SCRIPT_TOKEN mancante o non valido" >&2; exit 1; }
-            echo "Modulo collegato al foglio Google"
-          else
-            echo "GOOGLE_SCRIPT_URL non impostato: le iscrizioni vengono salvate solo sull'hosting"
-          fi
-          printf "<?php\nreturn [\n    'sito' => '%s',\n    'google_url' => '%s',\n    'google_token' => '%s',\n];\n" \
-            "${SITE_URL%/}" "$GOOGLE_SCRIPT_URL" "$GOOGLE_SCRIPT_TOKEN" > _site/api/config.php
+          RECAPTCHA_SECRET: ${{ secrets.RECAPTCHA_SECRET }}
+        run: scripts/config-modulo.sh _site/api/config.php "$SITE_URL"
 
       - name: Installa lftp
         run: sudo apt-get update -q && sudo apt-get install -y -q lftp
 
-      - name: Configura SSH
-        if: env.SFTP_PROTOCOL == 'sftp'
-        run: |
-          install -m 700 -d ~/.ssh
-          printf '%s\n' "$SFTP_KNOWN_HOSTS" > ~/.ssh/known_hosts
-          if [ -n "$SFTP_KEY" ]; then
-            printf '%s\n' "$SFTP_KEY" > ~/.ssh/deploy_key
-            chmod 600 ~/.ssh/deploy_key
-          fi
-
-      - name: Verifica che il server sia raggiungibile
-        run: |
-          case "$SFTP_PROTOCOL" in sftp) port="${SFTP_PORT:-22}" ;; *) port="${SFTP_PORT:-21}" ;; esac
-          echo "IP pubblico del runner: $(curl -s -m 10 https://api.ipify.org || echo sconosciuto)"
-          if ! timeout 20 bash -c "</dev/tcp/$SFTP_HOST/$port"; then
-            echo "Il server non risponde sulla porta $port da GitHub Actions." >&2
-            echo "Se dal tuo computer funziona, il provider blocca le connessioni dall'estero o da questi IP:" >&2
-            echo "su Tophost abilita l'accesso FTP dall'estero nel pannello di controllo." >&2
-            exit 1
-          fi
-          echo "Porta $port raggiungibile"
-
-      # Le pagine e gli altri file di testo vengono sempre ricaricati; gli altri solo se cambiano dimensione,
-      # perché il checkout azzera le date di modifica. Con SFTP_DELETE=true vengono
-      # cancellati dal server i file che non esistono più nel sito.
       - name: Carica i file
-        run: |
-          case "$SFTP_PROTOCOL" in
-            sftp)
-              ssh_cmd="ssh -a -x -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$HOME/.ssh/known_hosts"
-              [ -n "$SFTP_KEY" ] && ssh_cmd="$ssh_cmd -o IdentitiesOnly=yes -i $HOME/.ssh/deploy_key"
-              settings="set sftp:auto-confirm no; set sftp:connect-program \"$ssh_cmd\""
-              url="sftp://$SFTP_HOST:${SFTP_PORT:-22}" ;;
-            ftps)
-              settings="set ftp:ssl-force true; set ftp:ssl-protect-data true; set ssl:verify-certificate ${FTP_VERIFY_CERT:-yes}"
-              # Alcuni server (es. Tophost) non inviano il certificato intermedio: lo si scarica
-              # dall'indirizzo indicato nel certificato e lo si usa solo se firmato da una CA fidata.
-              ca="$RUNNER_TEMP/ca.pem"
-              cp /etc/ssl/certs/ca-certificates.crt "$ca"
-              issuer_url="$(echo | openssl s_client -starttls ftp -connect "$SFTP_HOST:${SFTP_PORT:-21}" -servername "$SFTP_HOST" 2>/dev/null \
-                | openssl x509 -noout -ext authorityInfoAccess 2>/dev/null | sed -n 's/.*CA Issuers - URI:\(.*\)/\1/p' | head -1)"
-              if [ -n "$issuer_url" ] && curl -fsS -m 20 "$issuer_url" -o "$RUNNER_TEMP/issuer.crt"; then
-                openssl x509 -inform DER -in "$RUNNER_TEMP/issuer.crt" -out "$RUNNER_TEMP/issuer.pem" 2>/dev/null \
-                  || openssl x509 -in "$RUNNER_TEMP/issuer.crt" -out "$RUNNER_TEMP/issuer.pem"
-                if openssl verify -CAfile /etc/ssl/certs/ca-certificates.crt "$RUNNER_TEMP/issuer.pem"; then
-                  cat "$RUNNER_TEMP/issuer.pem" >> "$ca"
-                  echo "Aggiunto il certificato intermedio da $issuer_url"
-                fi
-              fi
-              settings="$settings; set ssl:ca-file $ca"
-              url="ftp://$SFTP_HOST:${SFTP_PORT:-21}" ;;
-            ftp)
-              settings="set ftp:ssl-allow false"
-              url="ftp://$SFTP_HOST:${SFTP_PORT:-21}" ;;
-          esac
-          auth="-u $SFTP_USER,"
-          [ -n "$LFTP_PASSWORD" ] && auth="--env-password -u $SFTP_USER"
-          delete=""
-          [ "$SFTP_DELETE" = "true" ] && delete="--delete"
-          # File di testo (pagine, PHP, robots, sitemap): ricaricati sempre, anche se la dimensione non cambia
-          testo="$(cd _site && find . -type f \( -name '*.html' -o -name '*.php' -o -name '*.txt' -o -name '*.xml' \) | sed 's|^\./||' |
-            while read -r f; do d="$(dirname "$f")"; [ "$d" = . ] && d=""; printf 'put -O "%s/%s" "_site/%s"\n' "${SFTP_REMOTE_DIR%/}" "$d" "$f"; done)"
-          lftp <<LFTP
-          set cmd:fail-exit yes
-          set net:max-retries 2
-          set net:timeout 30
-          set net:reconnect-interval-base 5
-          set ftp:passive-mode true
-          $settings
-          open $auth $url
-          mirror --reverse --ignore-time --parallel=4 --verbose $delete _site/ "$SFTP_REMOTE_DIR"
-          $testo
-          bye
-          LFTP
+        run: scripts/pubblica-ftp.sh _site "$SFTP_REMOTE_DIR"

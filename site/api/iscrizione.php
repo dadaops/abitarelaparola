@@ -18,21 +18,17 @@ header('Content-Type: application/json; charset=utf-8');
 header('X-Content-Type-Options: nosniff');
 header('Cache-Control: no-store');
 
+require __DIR__ . '/controllo-file.php';
+
 $config = is_file(__DIR__ . '/config.php') ? (require __DIR__ . '/config.php') : [];
 $googleUrl = (string)($config['google_url'] ?? '');
 $googleToken = (string)($config['google_token'] ?? '');
 $sito = rtrim((string)($config['sito'] ?? 'https://www.abitarelaparola.it'), '/');
-$cartellaDati = (string)($config['cartella_dati'] ?? '') ?: cartellaPredefinita();
+$recaptchaSegreto = (string)($config['recaptcha_secret'] ?? '');
+$recaptchaSoglia = (float)($config['recaptcha_soglia'] ?? 0.5);
+$cartellaDati = (string)($config['cartella_dati'] ?? '') ?: cartellaPredefinita((string)($config['nome_archivio'] ?? 'dati-iscrizioni'));
 
 const MAX_FILE = 10 * 1024 * 1024;
-const ESTENSIONI = [
-    'application/pdf' => 'pdf',
-    'image/jpeg' => 'jpg',
-    'image/png' => 'png',
-    'image/webp' => 'webp',
-    'image/heic' => 'heic',
-    'image/heif' => 'heif',
-];
 const IMPORTI = ['Bonifico' => '100', 'Carta del docente' => '122', 'Carta cultura' => '122'];
 // Ordine degli stati: un invio non riporta mai indietro un'iscrizione.
 const STATI = ['contatto' => 1, 'in_attesa_pagamento' => 2, 'ricevuta_inviata' => 3];
@@ -45,21 +41,22 @@ const COLONNE = [
     'primo_contatto', 'inviato_a_google',
 ];
 
-// Cartella dell'archivio: fuori dalla parte pubblica del sito se l'hosting lo consente, altrimenti
-// una cartella del sito con nome casuale (creato una volta e ricordato in api/.cartella-dati.php),
-// protetta anche da .htaccess. Il nome casuale serve se il server non applica .htaccess ai file statici.
-function cartellaPredefinita(): string
+// Cartella dell'archivio: accanto alla radice pubblica del sito (quindi non raggiungibile dal web) se
+// l'hosting lo consente, altrimenti dentro il modulo con nome casuale (creato una volta e ricordato in
+// api/.cartella-dati.php), protetta anche da .htaccess. Il nome casuale serve se il server non applica
+// .htaccess ai file statici.
+function cartellaPredefinita(string $nome): string
 {
-    $sito = dirname(__DIR__);
-    $fuori = dirname($sito) . '/dati-iscrizioni';
-    if (is_dir($fuori) || (is_writable(dirname($sito)) && @mkdir($fuori, 0750))) {
+    $radice = realpath((string)($_SERVER['DOCUMENT_ROOT'] ?? '')) ?: dirname(__DIR__);
+    $fuori = dirname($radice) . '/' . $nome;
+    if (is_dir($fuori) || (is_writable(dirname($radice)) && @mkdir($fuori, 0750))) {
         return $fuori;
     }
     $memo = __DIR__ . '/.cartella-dati.php';
     if (is_file($memo)) {
         return (string)(require $memo);
     }
-    $cartella = $sito . '/dati-iscrizioni-' . bin2hex(random_bytes(12));
+    $cartella = dirname(__DIR__) . '/' . $nome . '-' . bin2hex(random_bytes(12));
     file_put_contents($memo, '<?php return ' . var_export($cartella, true) . ";\n");
     return $cartella;
 }
@@ -176,6 +173,35 @@ function inviaAGoogle(string $url, array $dati): bool
     return is_array($esito) && !empty($esito['ok']);
 }
 
+// reCAPTCHA v3: restituisce un messaggio di errore, oppure null se la verifica è superata o non configurata.
+function verificaRecaptcha(string $segreto, float $soglia, string $azione): ?string
+{
+    if ($segreto === '') {
+        return null;
+    }
+    $token = campo('recaptcha', 4000);
+    if ($token === '') {
+        return 'verifica anti-spam mancante: ricarica la pagina e riprova';
+    }
+    $ch = curl_init('https://www.google.com/recaptcha/api/siteverify');
+    curl_setopt_array($ch, [
+        CURLOPT_POST => true,
+        CURLOPT_POSTFIELDS => http_build_query(['secret' => $segreto, 'response' => $token, 'remoteip' => $_SERVER['REMOTE_ADDR'] ?? '']),
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_TIMEOUT => 10,
+    ]);
+    $risposta = json_decode((string)curl_exec($ch), true);
+    if (!is_array($risposta)) {
+        return null; // Google non raggiungibile: non blocchiamo l'iscrizione, restano campo trappola e controlli sui dati
+    }
+    if (empty($risposta['success'])
+        || (isset($risposta['action']) && $risposta['action'] !== $azione)
+        || (isset($risposta['score']) && (float)$risposta['score'] < $soglia)) {
+        return 'verifica anti-spam non superata: riprova, oppure scrivi a abitarelaparola@gmail.com';
+    }
+    return null;
+}
+
 function iscrizioneAutorizzata(string $cartella, string $id, string $chiaveRicevuta): array
 {
     if (!preg_match('/^ALP-[0-9A-F]{16}$/', $id) || !hash_equals(chiave($id), $chiaveRicevuta)) {
@@ -214,6 +240,11 @@ $adesso = (new DateTimeImmutable('now', new DateTimeZone('Europe/Rome')))->forma
 // Bot: campo trappola compilato o prenotazione inviata in pochi secondi. Rispondiamo ok senza salvare.
 if (campo('sito_web') !== '' || ($azione === 'contatto' && (int)campo('tempo_compilazione') < 3)) {
     rispondi(200, ['ok' => true, 'id' => 'ALP-0000000000000000', 'chiave' => '']);
+}
+
+if (in_array($azione, ['contatto', 'pagamento', 'questionario'], true)
+    && ($errore = verificaRecaptcha($recaptchaSegreto, $recaptchaSoglia, $azione)) !== null) {
+    rispondi(403, ['ok' => false, 'errore' => $errore]);
 }
 
 preparaCartella($cartellaDati);
@@ -260,15 +291,13 @@ if ($azione === 'contatto') {
         if ($f['error'] !== UPLOAD_ERR_OK || $f['size'] > MAX_FILE) {
             rispondi(413, ['ok' => false, 'errore' => 'file troppo grande o non ricevuto']);
         }
-        $tipo = (new finfo(FILEINFO_MIME_TYPE))->file($f['tmp_name']) ?: '';
-        $estensione = ESTENSIONI[$tipo] ?? null;
-        if ($estensione === null && preg_match('/\.(heic|heif)$/i', (string)$f['name'])) {
-            $estensione = strtolower(pathinfo((string)$f['name'], PATHINFO_EXTENSION));
-            $tipo = 'image/' . $estensione;
+        $controllo = controllaRicevuta($f['tmp_name']);
+        if (!$controllo['ok']) {
+            @unlink($f['tmp_name']);
+            rispondi(415, ['ok' => false, 'errore' => $controllo['errore']]);
         }
-        if ($estensione === null) {
-            rispondi(415, ['ok' => false, 'errore' => 'formato del file non supportato']);
-        }
+        $tipo = $controllo['tipo'];
+        $estensione = $controllo['estensione'];
         $nomeFile = $d['id'] . '-' . bin2hex(random_bytes(8)) . '.' . $estensione;
         if (!move_uploaded_file($f['tmp_name'], "$cartellaDati/ricevute/$nomeFile")) {
             rispondi(500, ['ok' => false, 'errore' => 'impossibile salvare il file']);
