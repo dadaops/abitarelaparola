@@ -202,6 +202,22 @@ function verificaRecaptcha(string $segreto, float $soglia, string $azione): ?str
     return null;
 }
 
+// Per l'archivio dentro il sito: prova a leggerne dal web il file index.html (vuoto). true se il server lo
+// rifiuta, false se lo serve, null se non è nel sito o la verifica non è possibile. Non rivela il nome della cartella.
+function archivioBloccato(string $cartella, string $radice, string $sito): ?bool
+{
+    if (!str_starts_with($cartella, $radice . '/') || !is_file("$cartella/index.html")) {
+        return null;
+    }
+    $percorsoModulo = substr(dirname(__DIR__), strlen($radice));
+    $base = preg_replace('~' . preg_quote($percorsoModulo, '~') . '$~', '', $sito);
+    $ch = curl_init($base . substr($cartella, strlen($radice)) . '/index.html');
+    curl_setopt_array($ch, [CURLOPT_NOBODY => true, CURLOPT_RETURNTRANSFER => true, CURLOPT_TIMEOUT => 8]);
+    curl_exec($ch);
+    $codice = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+    return $codice === 0 ? null : $codice >= 400;
+}
+
 function iscrizioneAutorizzata(string $cartella, string $id, string $chiaveRicevuta): array
 {
     if (!preg_match('/^ALP-[0-9A-F]{16}$/', $id) || !hash_equals(chiave($id), $chiaveRicevuta)) {
@@ -224,6 +240,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
             'google' => $googleUrl !== '',
             'recaptcha' => $recaptchaSegreto !== '',
             'archivio' => str_starts_with($cartellaDati, $radice . '/') ? 'nel sito, cartella con nome casuale' : 'fuori dalla parte pubblica',
+            'archivio_bloccato_dal_web' => archivioBloccato($cartellaDati, $radice, $sito),
             'ricodifica_jpg' => function_exists('imagecreatefromjpeg'),
             'antivirus' => scansioneAntivirus(__FILE__) === null && (bool)array_filter(['clamdscan', 'clamscan'], static function ($p) {
                 $t = [];
