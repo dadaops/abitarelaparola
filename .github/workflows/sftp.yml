@@ -60,21 +60,24 @@ jobs:
       - name: Prepara il sito
         run: scripts/build.sh "$SITE_URL" _site
 
-      # Collegamento al foglio Google per il modulo di iscrizione: URL e token restano nei secret
-      # e finiscono solo nel file caricato sul server, mai nel repo o nello zip delle Releases.
+      # Configurazione del modulo di iscrizione: indirizzo del sito (per i link personali) e collegamento
+      # al foglio Google. URL e token restano nei secret e finiscono solo nel file caricato sul server,
+      # mai nel repo o nello zip delle Releases.
       - name: Configura il modulo di iscrizione
         env:
           GOOGLE_SCRIPT_URL: ${{ secrets.GOOGLE_SCRIPT_URL }}
           GOOGLE_SCRIPT_TOKEN: ${{ secrets.GOOGLE_SCRIPT_TOKEN }}
         run: |
-          if [ -z "$GOOGLE_SCRIPT_URL" ]; then
+          [[ "$SITE_URL" =~ ^https?://[A-Za-z0-9.:-]+$ ]] || { echo "SITE_URL non valido" >&2; exit 1; }
+          if [ -n "$GOOGLE_SCRIPT_URL" ]; then
+            [[ "$GOOGLE_SCRIPT_URL" =~ ^https://script\.google\.com/macros/s/[A-Za-z0-9_-]+/exec$ ]] || { echo "GOOGLE_SCRIPT_URL non valido" >&2; exit 1; }
+            [[ "$GOOGLE_SCRIPT_TOKEN" =~ ^[A-Za-z0-9]{32,128}$ ]] || { echo "GOOGLE_SCRIPT_TOKEN mancante o non valido" >&2; exit 1; }
+            echo "Modulo collegato al foglio Google"
+          else
             echo "GOOGLE_SCRIPT_URL non impostato: le iscrizioni vengono salvate solo sull'hosting"
-            exit 0
           fi
-          [[ "$GOOGLE_SCRIPT_URL" =~ ^https://script\.google\.com/macros/s/[A-Za-z0-9_-]+/exec$ ]] || { echo "GOOGLE_SCRIPT_URL non valido" >&2; exit 1; }
-          [[ "$GOOGLE_SCRIPT_TOKEN" =~ ^[A-Za-z0-9]{32,128}$ ]] || { echo "GOOGLE_SCRIPT_TOKEN mancante o non valido" >&2; exit 1; }
-          printf "<?php\nreturn [\n    'google_url' => '%s',\n    'google_token' => '%s',\n];\n" "$GOOGLE_SCRIPT_URL" "$GOOGLE_SCRIPT_TOKEN" > _site/api/config.php
-          echo "Modulo collegato al foglio Google"
+          printf "<?php\nreturn [\n    'sito' => '%s',\n    'google_url' => '%s',\n    'google_token' => '%s',\n];\n" \
+            "${SITE_URL%/}" "$GOOGLE_SCRIPT_URL" "$GOOGLE_SCRIPT_TOKEN" > _site/api/config.php
 
       - name: Installa lftp
         run: sudo apt-get update -q && sudo apt-get install -y -q lftp

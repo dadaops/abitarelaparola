@@ -1,9 +1,15 @@
 <?php
-// Riceve le iscrizioni dal modulo /iscrizione/.
-// 1. Salva ogni invio sull'hosting: riga in iscrizioni.csv e ricevuta nella cartella ricevute/,
-//    dentro una cartella non accessibile dal web.
-// 2. Se configurato (api/config.php), inoltra l'iscrizione al foglio Google tramite Apps Script.
-// GET restituisce lo stato del servizio, senza dati.
+// Riceve le iscrizioni dal modulo /iscrizione/, in tre momenti dello stesso flusso:
+//   azione=contatto      prenotazione del posto (nome, cognome, email, cellulare, consenso)
+//   azione=pagamento     metodo di pagamento e ricevuta, subito o più tardi dal link personale
+//   azione=questionario  domande integrative, dopo la ricevuta
+// GET ?azione=stato&id=…&chiave=… restituisce lo stato per il link personale; GET senza parametri lo stato del servizio.
+//
+// Ogni iscrizione ha un codice (ALP-…) e una chiave firmata con un segreto del server: solo chi ha il link
+// personale può completarla. I dati vengono:
+// 1. salvati sull'hosting: stato attuale in iscrizioni/<codice>.json, storico in iscrizioni.csv, ricevute in
+//    ricevute/, dentro una cartella non accessibile dal web;
+// 2. inoltrati al foglio Google tramite Apps Script, se configurato in api/config.php.
 declare(strict_types=1);
 
 ini_set('display_errors', '0');
@@ -15,6 +21,7 @@ header('Cache-Control: no-store');
 $config = is_file(__DIR__ . '/config.php') ? (require __DIR__ . '/config.php') : [];
 $googleUrl = (string)($config['google_url'] ?? '');
 $googleToken = (string)($config['google_token'] ?? '');
+$sito = rtrim((string)($config['sito'] ?? 'https://www.abitarelaparola.it'), '/');
 $cartellaDati = (string)($config['cartella_dati'] ?? '') ?: cartellaPredefinita();
 
 const MAX_FILE = 10 * 1024 * 1024;
@@ -26,13 +33,16 @@ const ESTENSIONI = [
     'image/heic' => 'heic',
     'image/heif' => 'heif',
 ];
+const IMPORTI = ['Bonifico' => '100', 'Carta del docente' => '122', 'Carta cultura' => '122'];
+// Ordine degli stati: un invio non riporta mai indietro un'iscrizione.
+const STATI = ['contatto' => 1, 'in_attesa_pagamento' => 2, 'ricevuta_inviata' => 3];
 const COLONNE = [
-    'id', 'stato', 'ricevuto_il', 'nome', 'cognome', 'email', 'telefono', 'consenso',
-    'professione', 'professione_altro', 'anni', 'ambito', 'ambito_altro', 'istituto',
-    'fascia', 'intolleranze', 'accompagnatore', 'note',
-    'pagamento', 'importo', 'ricevuta_quando', 'ricevuta_file',
-    'utm_source', 'utm_medium', 'utm_campaign', 'referrer', 'pagina', 'tempo_compilazione',
-    'inviato_a_google',
+    'id', 'stato', 'aggiornato', 'evento', 'nome', 'cognome', 'email', 'telefono', 'consenso',
+    'pagamento', 'importo', 'ricevuta_file', 'questionario',
+    'fascia', 'professione', 'professione_altro', 'anni', 'ambito', 'ambito_altro', 'istituto',
+    'intolleranze', 'accompagnatore', 'note',
+    'link_personale', 'utm_source', 'utm_medium', 'utm_campaign', 'referrer', 'pagina',
+    'primo_contatto', 'inviato_a_google',
 ];
 
 // Cartella dell'archivio: fuori dalla parte pubblica del sito se l'hosting lo consente, altrimenti
@@ -54,6 +64,21 @@ function cartellaPredefinita(): string
     return $cartella;
 }
 
+// Segreto del server per firmare i link personali: generato al primo uso, non è nel repo.
+function segreto(): string
+{
+    $file = __DIR__ . '/.segreto.php';
+    if (!is_file($file)) {
+        file_put_contents($file, '<?php return ' . var_export(bin2hex(random_bytes(32)), true) . ";\n", LOCK_EX);
+    }
+    return (string)(require $file);
+}
+
+function chiave(string $id): string
+{
+    return substr(hash_hmac('sha256', $id, segreto()), 0, 32);
+}
+
 function rispondi(int $codice, array $dati): void
 {
     http_response_code($codice);
@@ -61,9 +86,9 @@ function rispondi(int $codice, array $dati): void
     exit;
 }
 
-function campo(string $nome, int $max = 500): string
+function campo(string $nome, int $max = 500, ?array $origine = null): string
 {
-    $v = $_POST[$nome] ?? '';
+    $v = ($origine ?? $_POST)[$nome] ?? '';
     if (!is_string($v)) {
         return '';
     }
@@ -79,18 +104,50 @@ function cella(string $v): string
 
 function preparaCartella(string $cartella): void
 {
-    if (!is_dir($cartella . '/ricevute') && !mkdir($cartella . '/ricevute', 0750, true) && !is_dir($cartella . '/ricevute')) {
-        rispondi(500, ['ok' => false, 'errore' => 'archivio non disponibile']);
+    foreach (['ricevute', 'iscrizioni'] as $sotto) {
+        if (!is_dir("$cartella/$sotto") && !mkdir("$cartella/$sotto", 0750, true) && !is_dir("$cartella/$sotto")) {
+            rispondi(500, ['ok' => false, 'errore' => 'archivio non disponibile']);
+        }
     }
     $htaccess = "<IfModule mod_authz_core.c>\nRequire all denied\n</IfModule>\n<IfModule !mod_authz_core.c>\nDeny from all\n</IfModule>\n";
-    foreach ([$cartella, $cartella . '/ricevute'] as $c) {
-        if (!is_file($c . '/.htaccess')) {
-            file_put_contents($c . '/.htaccess', $htaccess);
+    foreach ([$cartella, "$cartella/ricevute", "$cartella/iscrizioni"] as $c) {
+        if (!is_file("$c/.htaccess")) {
+            file_put_contents("$c/.htaccess", $htaccess);
         }
-        if (!is_file($c . '/index.html')) {
-            file_put_contents($c . '/index.html', '');
+        if (!is_file("$c/index.html")) {
+            file_put_contents("$c/index.html", '');
         }
     }
+}
+
+function leggiIscrizione(string $cartella, string $id): ?array
+{
+    $file = "$cartella/iscrizioni/$id.json";
+    if (!is_file($file)) {
+        return null;
+    }
+    $d = json_decode((string)file_get_contents($file), true);
+    return is_array($d) ? $d : null;
+}
+
+function salvaIscrizione(string $cartella, array $d): void
+{
+    file_put_contents("$cartella/iscrizioni/{$d['id']}.json", json_encode($d, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT), LOCK_EX);
+
+    $csv = "$cartella/iscrizioni.csv";
+    $nuovo = !is_file($csv);
+    $fh = fopen($csv, 'ab');
+    if ($fh === false || !flock($fh, LOCK_EX)) {
+        rispondi(500, ['ok' => false, 'errore' => 'archivio non disponibile']);
+    }
+    if ($nuovo) {
+        fwrite($fh, "\xEF\xBB\xBF"); // BOM: Excel apre correttamente gli accenti
+        fputcsv($fh, COLONNE, ';', '"', '');
+    }
+    fputcsv($fh, array_map(fn($c) => cella((string)($d[$c] ?? '')), COLONNE), ';', '"', '');
+    fflush($fh);
+    flock($fh, LOCK_UN);
+    fclose($fh);
 }
 
 function inviaAGoogle(string $url, array $dati): bool
@@ -119,86 +176,140 @@ function inviaAGoogle(string $url, array $dati): bool
     return is_array($esito) && !empty($esito['ok']);
 }
 
+function iscrizioneAutorizzata(string $cartella, string $id, string $chiaveRicevuta): array
+{
+    if (!preg_match('/^ALP-[0-9A-F]{16}$/', $id) || !hash_equals(chiave($id), $chiaveRicevuta)) {
+        rispondi(403, ['ok' => false, 'errore' => 'link non valido']);
+    }
+    $d = leggiIscrizione($cartella, $id);
+    if ($d === null) {
+        rispondi(404, ['ok' => false, 'errore' => 'iscrizione non trovata']);
+    }
+    return $d;
+}
+
+// --- Richieste GET -------------------------------------------------------------------------------
 if ($_SERVER['REQUEST_METHOD'] === 'GET') {
-    rispondi(200, ['ok' => true, 'servizio' => 'iscrizioni', 'google' => $googleUrl !== '']);
+    if (campo('azione', 20, $_GET) !== 'stato') {
+        rispondi(200, ['ok' => true, 'servizio' => 'iscrizioni', 'google' => $googleUrl !== '']);
+    }
+    $d = iscrizioneAutorizzata($cartellaDati, campo('id', 40, $_GET), campo('chiave', 64, $_GET));
+    rispondi(200, [
+        'ok' => true,
+        'nome' => $d['nome'],
+        'email' => $d['email'],
+        'pagamento' => $d['pagamento'] ?? '',
+        'ricevuta' => ($d['ricevuta_file'] ?? '') !== '',
+        'questionario' => ($d['questionario'] ?? '') === 'si',
+    ]);
 }
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     rispondi(405, ['ok' => false, 'errore' => 'metodo non consentito']);
 }
 
-// Bot: campo trappola compilato o modulo inviato in pochi secondi. Rispondiamo ok senza salvare.
-if (campo('sito_web') !== '' || (campo('stato') === 'completa' && (int)campo('tempo_compilazione') < 5)) {
-    rispondi(200, ['ok' => true]);
-}
+// --- Richieste POST ------------------------------------------------------------------------------
+$azione = campo('azione', 20);
+$adesso = (new DateTimeImmutable('now', new DateTimeZone('Europe/Rome')))->format('Y-m-d H:i:s');
 
-$d = [];
-foreach (COLONNE as $c) {
-    $d[$c] = '';
-}
-$d['id'] = campo('id', 40);
-$d['stato'] = campo('stato', 20) === 'completa' ? 'completa' : 'parziale';
-$d['ricevuto_il'] = (new DateTimeImmutable('now', new DateTimeZone('Europe/Rome')))->format('Y-m-d H:i:s');
-foreach (['nome', 'cognome', 'telefono', 'professione_altro', 'anni', 'ambito_altro', 'istituto', 'fascia', 'intolleranze',
-          'accompagnatore', 'pagamento', 'ricevuta_quando', 'utm_source', 'utm_medium', 'utm_campaign', 'tempo_compilazione'] as $c) {
-    $d[$c] = campo($c, 200);
-}
-foreach (['professione', 'ambito', 'referrer', 'pagina'] as $c) {
-    $d[$c] = campo($c, 500);
-}
-$d['note'] = campo('note', 2000);
-$d['email'] = mb_strtolower(campo('email', 200));
-$d['consenso'] = campo('consenso') === 'si' ? 'si, ' . $d['ricevuto_il'] : '';
-$d['importo'] = ['Bonifico' => '100', 'Carta del docente' => '122', 'Carta cultura' => '122'][$d['pagamento']] ?? '';
-
-if (!preg_match('/^ALP-[0-9A-F]{16}$/', $d['id'])) {
-    rispondi(400, ['ok' => false, 'errore' => 'identificativo non valido']);
-}
-$errori = [];
-if (mb_strlen($d['nome']) < 2) $errori[] = 'nome';
-if (mb_strlen($d['cognome']) < 2) $errori[] = 'cognome';
-if (!filter_var($d['email'], FILTER_VALIDATE_EMAIL)) $errori[] = 'email';
-if (strlen(preg_replace('/\D/', '', $d['telefono'])) < 8) $errori[] = 'telefono';
-if ($d['consenso'] === '') $errori[] = 'consenso';
-if ($d['stato'] === 'completa') {
-    if ($d['professione'] === '') $errori[] = 'professione';
-    if ($d['ambito'] === '') $errori[] = 'ambito';
-    if ($d['fascia'] === '') $errori[] = 'fascia';
-    if ($d['importo'] === '') $errori[] = 'pagamento';
-}
-if ($errori) {
-    rispondi(422, ['ok' => false, 'errore' => 'dati mancanti: ' . implode(', ', $errori)]);
+// Bot: campo trappola compilato o prenotazione inviata in pochi secondi. Rispondiamo ok senza salvare.
+if (campo('sito_web') !== '' || ($azione === 'contatto' && (int)campo('tempo_compilazione') < 3)) {
+    rispondi(200, ['ok' => true, 'id' => 'ALP-0000000000000000', 'chiave' => '']);
 }
 
 preparaCartella($cartellaDati);
-
-// Ricevuta del pagamento
 $file = null;
-if ($d['stato'] === 'completa' && isset($_FILES['ricevuta']) && $_FILES['ricevuta']['error'] !== UPLOAD_ERR_NO_FILE) {
-    $f = $_FILES['ricevuta'];
-    if ($f['error'] !== UPLOAD_ERR_OK || $f['size'] > MAX_FILE) {
-        rispondi(413, ['ok' => false, 'errore' => 'file troppo grande o non ricevuto']);
+
+if ($azione === 'contatto') {
+    // Una persona che torna indietro e corregge i contatti mantiene lo stesso codice.
+    $id = campo('id', 40);
+    $d = ($id !== '' && hash_equals(chiave($id), campo('chiave', 64))) ? leggiIscrizione($cartellaDati, $id) : null;
+    if ($d === null) {
+        $id = 'ALP-' . strtoupper(bin2hex(random_bytes(8)));
+        $d = ['id' => $id, 'stato' => 'contatto', 'primo_contatto' => $adesso];
+        foreach (['utm_source', 'utm_medium', 'utm_campaign'] as $c) {
+            $d[$c] = campo($c, 100);
+        }
+        $d['referrer'] = campo('referrer', 300);
+        $d['pagina'] = campo('pagina', 300);
     }
-    $tipo = (new finfo(FILEINFO_MIME_TYPE))->file($f['tmp_name']) ?: '';
-    $estensione = ESTENSIONI[$tipo] ?? null;
-    if ($estensione === null && preg_match('/\.(heic|heif)$/i', (string)$f['name'])) {
-        $estensione = strtolower(pathinfo((string)$f['name'], PATHINFO_EXTENSION));
-        $tipo = 'image/' . $estensione;
+    $d['nome'] = campo('nome', 80);
+    $d['cognome'] = campo('cognome', 80);
+    $d['email'] = mb_strtolower(campo('email', 200));
+    $d['telefono'] = campo('telefono', 40);
+    $d['consenso'] = campo('consenso') === 'si' ? 'si, ' . $adesso : '';
+    $errori = [];
+    if (mb_strlen($d['nome']) < 2) $errori[] = 'nome';
+    if (mb_strlen($d['cognome']) < 2) $errori[] = 'cognome';
+    if (!filter_var($d['email'], FILTER_VALIDATE_EMAIL)) $errori[] = 'email';
+    if (strlen(preg_replace('/\D/', '', $d['telefono'])) < 8) $errori[] = 'cellulare';
+    if ($d['consenso'] === '') $errori[] = 'consenso';
+    if ($errori) {
+        rispondi(422, ['ok' => false, 'errore' => 'dati mancanti: ' . implode(', ', $errori)]);
     }
-    if ($estensione === null) {
-        rispondi(415, ['ok' => false, 'errore' => 'formato del file non supportato']);
+    $d['link_personale'] = $sito . '/iscrizione/?c=' . $d['id'] . '&k=' . chiave($d['id']);
+} elseif ($azione === 'pagamento') {
+    $d = iscrizioneAutorizzata($cartellaDati, campo('id', 40), campo('chiave', 64));
+    $pagamento = campo('pagamento', 40);
+    if (!isset(IMPORTI[$pagamento])) {
+        rispondi(422, ['ok' => false, 'errore' => 'scegli come pagare']);
     }
-    $nomeFile = $d['id'] . '-' . bin2hex(random_bytes(8)) . '.' . $estensione;
-    if (!move_uploaded_file($f['tmp_name'], $cartellaDati . '/ricevute/' . $nomeFile)) {
-        rispondi(500, ['ok' => false, 'errore' => 'impossibile salvare il file']);
+    $d['pagamento'] = $pagamento;
+    $d['importo'] = IMPORTI[$pagamento];
+    if (isset($_FILES['ricevuta']) && $_FILES['ricevuta']['error'] !== UPLOAD_ERR_NO_FILE) {
+        $f = $_FILES['ricevuta'];
+        if ($f['error'] !== UPLOAD_ERR_OK || $f['size'] > MAX_FILE) {
+            rispondi(413, ['ok' => false, 'errore' => 'file troppo grande o non ricevuto']);
+        }
+        $tipo = (new finfo(FILEINFO_MIME_TYPE))->file($f['tmp_name']) ?: '';
+        $estensione = ESTENSIONI[$tipo] ?? null;
+        if ($estensione === null && preg_match('/\.(heic|heif)$/i', (string)$f['name'])) {
+            $estensione = strtolower(pathinfo((string)$f['name'], PATHINFO_EXTENSION));
+            $tipo = 'image/' . $estensione;
+        }
+        if ($estensione === null) {
+            rispondi(415, ['ok' => false, 'errore' => 'formato del file non supportato']);
+        }
+        $nomeFile = $d['id'] . '-' . bin2hex(random_bytes(8)) . '.' . $estensione;
+        if (!move_uploaded_file($f['tmp_name'], "$cartellaDati/ricevute/$nomeFile")) {
+            rispondi(500, ['ok' => false, 'errore' => 'impossibile salvare il file']);
+        }
+        $file = ['nome' => $nomeFile, 'tipo' => $tipo, 'percorso' => "$cartellaDati/ricevute/$nomeFile"];
+        $d['ricevuta_file'] = $nomeFile;
+        $nuovoStato = 'ricevuta_inviata';
+    } else {
+        $nuovoStato = 'in_attesa_pagamento';
     }
-    $file = ['nome' => $nomeFile, 'tipo' => $tipo, 'percorso' => $cartellaDati . '/ricevute/' . $nomeFile];
-    $d['ricevuta_file'] = $nomeFile;
+    if ((STATI[$nuovoStato] ?? 0) > (STATI[$d['stato']] ?? 0)) {
+        $d['stato'] = $nuovoStato;
+    }
+} elseif ($azione === 'questionario') {
+    $d = iscrizioneAutorizzata($cartellaDati, campo('id', 40), campo('chiave', 64));
+    foreach (['fascia', 'anni', 'professione_altro', 'ambito_altro', 'istituto', 'intolleranze', 'accompagnatore'] as $c) {
+        $d[$c] = campo($c, 200);
+    }
+    $d['professione'] = campo('professione', 500);
+    $d['ambito'] = campo('ambito', 300);
+    $d['note'] = campo('note', 2000);
+    $soloStudenteGenitore = $d['professione'] !== '' && !array_diff(array_map('trim', explode(',', $d['professione'])), ['Studente', 'Genitore']);
+    $errori = [];
+    if ($d['fascia'] === '') $errori[] = 'fascia';
+    if ($d['professione'] === '') $errori[] = 'professione';
+    if ($d['anni'] === '' && !$soloStudenteGenitore) $errori[] = 'anni';
+    if ($d['ambito'] === '') $errori[] = 'ambito';
+    if ($errori) {
+        rispondi(422, ['ok' => false, 'errore' => 'dati mancanti: ' . implode(', ', $errori)]);
+    }
+    $d['questionario'] = 'si';
+} else {
+    rispondi(400, ['ok' => false, 'errore' => 'azione non valida']);
 }
 
-// Foglio Google
+$d['evento'] = $azione;
+$d['aggiornato'] = $adesso;
+
 if ($googleUrl !== '') {
     $perGoogle = $d;
-    unset($perGoogle['inviato_a_google']);
+    unset($perGoogle['inviato_a_google'], $perGoogle['ricevuta_file']);
     $perGoogle['token'] = $googleToken;
     if ($file) {
         $perGoogle['file'] = [
@@ -212,20 +323,12 @@ if ($googleUrl !== '') {
     $d['inviato_a_google'] = 'non configurato';
 }
 
-// Archivio sull'hosting: una riga per ogni invio (parziale e completo)
-$csv = $cartellaDati . '/iscrizioni.csv';
-$nuovo = !is_file($csv);
-$fh = fopen($csv, 'ab');
-if ($fh === false || !flock($fh, LOCK_EX)) {
-    rispondi(500, ['ok' => false, 'errore' => 'archivio non disponibile']);
-}
-if ($nuovo) {
-    fwrite($fh, "\xEF\xBB\xBF"); // BOM: Excel apre correttamente gli accenti
-    fputcsv($fh, COLONNE, ';', '"', '');
-}
-fputcsv($fh, array_map('cella', array_values($d)), ';', '"', '');
-fflush($fh);
-flock($fh, LOCK_UN);
-fclose($fh);
+salvaIscrizione($cartellaDati, $d);
 
-rispondi(200, ['ok' => true, 'id' => $d['id'], 'google' => $d['inviato_a_google']]);
+rispondi(200, [
+    'ok' => true,
+    'id' => $d['id'],
+    'chiave' => chiave($d['id']),
+    'stato' => $d['stato'],
+    'ricevuta' => ($d['ricevuta_file'] ?? '') !== '',
+]);

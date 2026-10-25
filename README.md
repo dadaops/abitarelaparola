@@ -27,59 +27,69 @@ Nei file di `site/` l'indirizzo del sito compare come `__SITE_URL__`: non va scr
 scripts/build.sh https://www.abitarelaparola.it _site
 ```
 
-## Modulo di iscrizione
+## Modulo di iscrizione (sperimentale, non pubblicato)
 
-`https://www.abitarelaparola.it/iscrizione/` sostituisce il modulo Google con gli stessi campi, in quattro passi brevi
-(contatti, profilo, partecipazione, pagamento). Non è indicizzato (`noindex`) e i pulsanti della landing puntano
-ancora al modulo Google finché non si decide di passare al nuovo.
+`site/iscrizione/` è l'alternativa al modulo Google. È in prova: la landing continua a usare il modulo Google e la pagina
+non è indicizzata (`noindex`). Il flusso è spezzato in due, per non frenare l'acquisto con domande non necessarie:
 
-Ogni invio viene salvato in due posti:
+| Passo | Cosa chiede | Stato dell'iscrizione |
+|---|---|---|
+| 1. Prenota il posto | nome, cognome, email, cellulare, consenso | `contatto` |
+| 2. Pagamento | metodo (Carta del Docente in evidenza) e ricevuta, oppure «non ho ancora pagato» | `ricevuta_inviata` o `in_attesa_pagamento` |
+| 3. Domande integrative | fascia Palazzo Butera, professione, anni, ambito, istituto, allergie, accompagnatore, note | (colonna «Domande integrative» = si) |
 
-1. **Sull'hosting Tophost**: una riga in `iscrizioni.csv` (separatore `;`, si apre con Excel) e la ricevuta in
-   `ricevute/`, dentro la cartella `dati-iscrizioni` creata dal PHP fuori dalla parte pubblica del sito. Se l'hosting
-   non lo consente, la cartella è dentro il sito con un nome casuale (`dati-iscrizioni-…`, indicato in
-   `api/.cartella-dati.php`) e protetta da `.htaccess`. Si scarica con FileZilla.
-2. **Nel foglio Google**, se collegato: una riga per iscrizione e le ricevute in una cartella di Drive, con il link
-   nel foglio.
+Dopo il passo 1 ogni iscrizione ha un **link personale** (`/iscrizione/?c=CODICE&k=CHIAVE`), mostrato a schermo e inviato
+per email: serve a caricare la ricevuta più tardi e poi rispondere alle domande, da qualsiasi dispositivo. La chiave è
+firmata con un segreto generato dal server (`api/.segreto.php`), quindi il link non si può indovinare.
+Lo stato `confermato` lo scrivete voi nel foglio dopo aver verificato il pagamento: il modulo non lo sovrascrive mai.
 
-Cosa fa in più rispetto al modulo Google:
+Email automatiche (dal foglio Google, partono dall'account che possiede lo script):
 
-- **Contatti salvati subito**: dopo il primo passo (con consenso) l'iscrizione viene registrata come `parziale`;
-  chi non completa può essere ricontattato. L'invio finale aggiorna la stessa riga a `completa`.
-- **Bozza nel browser**: le risposte restano salvate sul dispositivo; chi torna riprende da dove era rimasto.
-- **Meno attrito**: email corretta al volo (`gmial.com` → `gmail.com`), campi «Altro» solo se servono, anni di
-  professione facoltativi per studenti e genitori, IBAN e causale da copiare, ricevuta caricabile subito o da
-  inviare più tardi via email.
-- **Dopo l'invio**: codice di iscrizione, prossimi passi, invito a un collega su WhatsApp e promemoria nel calendario.
-- **Misurazione**: provenienza (UTM e referrer) salvata con l'iscrizione; eventi Analytics `form_iniziato`,
-  `lead_contatti`, `form_passo`, `form_pagamento_scelto`, `form_errore`, `iscrizione_inviata` (da segnare come evento
-  chiave), `form_invio_fallito`, `invito_collega`, `aggiungi_calendario`.
-- **Anti-spam**: campo nascosto per i bot e tempo minimo di compilazione.
+- **Prenotazione** (pagamento rimandato): istruzioni di pagamento e link per caricare la ricevuta.
+- **Ricevuta arrivata**: conferma e link alle domande integrative, se non ancora compilate.
+- **Promemoria** (ogni giorno alle 10, fino alla scadenza): a chi ha prenotato da almeno 20 ore senza ricevuta, una sola volta.
 
-La data di chiusura è la costante `CHIUSURA` nello script della pagina: dopo quella data il modulo mostra «iscrizioni
-chiuse» (si può comunque vedere aggiungendo `?anteprima` all'indirizzo).
+Ogni passo viene salvato in due posti:
+
+1. **Sull'hosting Tophost**: stato attuale in `iscrizioni/<codice>.json`, storico di tutti i passi in `iscrizioni.csv`
+   (separatore `;`, si apre con Excel) e ricevute in `ricevute/`, dentro la cartella `dati-iscrizioni` creata dal PHP fuori
+   dalla parte pubblica del sito. Se l'hosting non lo consente, la cartella è dentro il sito con un nome casuale
+   (`dati-iscrizioni-…`, indicato in `api/.cartella-dati.php`) e protetta da `.htaccess`. Si scarica con FileZilla.
+2. **Nel foglio Google**, se collegato: una riga per iscrizione, aggiornata a ogni passo senza cancellare i dati già
+   presenti, e le ricevute in una cartella di Drive con il link nel foglio.
+
+Altri accorgimenti: bozza dei contatti salvata nel browser, email corretta al volo (`gmial.com` → `gmail.com`), IBAN e
+causale da copiare, anni di professione facoltativi per studenti e genitori, campo nascosto e tempo minimo contro i bot,
+provenienza (UTM e referrer) salvata con l'iscrizione, invito a un collega su WhatsApp e promemoria nel calendario.
+
+Eventi Analytics: `form_iniziato`, `generate_lead` (passo 1), `begin_checkout`, `add_payment_info`, `iscrizione_prenotata`
+(evento chiave consigliato), `ricevuta_caricata` (evento chiave consigliato), `questionario_completato`,
+`link_personale_aperto`, `form_errore`, `form_invio_fallito`, `invito_collega`, `aggiungi_calendario`.
+
+La scadenza è `CHIUSURA` nello script della pagina e `SCADENZA` in `Codice.gs`: dopo quella data non si possono fare nuove
+prenotazioni, ma il link personale continua a funzionare. Con `?anteprima` nell'indirizzo il modulo si apre anche dopo la scadenza.
 
 ### Collegare il foglio Google
 
-1. Crea un foglio Google, per esempio «Abitare la parola – Iscrizioni», e apri **Estensioni → Apps Script**.
+1. Con l'account **abitarelaparola@gmail.com** (le email ai partecipanti partono da lì) crea un foglio Google, per esempio
+   «Abitare la parola – Iscrizioni», e apri **Estensioni → Apps Script**.
 2. Sostituisci il codice con il contenuto di `google-apps-script/Codice.gs` e salva.
-3. Scegli la funzione `configura` ed esegui. Autorizza l'accesso richiesto (foglio e Drive). Nel **Registro di
-   esecuzione** compare il token: copialo.
+3. Scegli la funzione `configura` ed esegui. Autorizza l'accesso richiesto (foglio, Drive, invio email, attivatori).
+   Nel **Registro di esecuzione** compare il token: copialo.
 4. **Esegui il deployment → Nuovo deployment → App web**: «Esegui come» **Me**, «Chi ha accesso» **Chiunque**.
    Copia l'URL che termina con `/exec`.
-5. Salva i due valori nei secret del repo e ripubblica:
+5. Salva i due valori nei secret del repo:
 
    ```bash
    gh secret set GOOGLE_SCRIPT_URL   --repo dadaops/abitarelaparola   # incolla l'URL /exec
    gh secret set GOOGLE_SCRIPT_TOKEN --repo dadaops/abitarelaparola   # incolla il token
-   gh workflow run sftp.yml --repo dadaops/abitarelaparola
    ```
 
-Il workflow scrive `api/config.php` sul server con questi valori: non finiscono mai nel repo né nello zip delle
-Releases. Senza secret il modulo funziona lo stesso e salva solo sull'hosting. Se modifichi `Codice.gs`, crea una
-nuova versione del deployment (Gestisci deployment → Modifica → Nuova versione), così l'URL resta lo stesso.
+Il workflow di caricamento scrive `api/config.php` sul server con l'indirizzo del sito e questi valori: non finiscono mai
+nel repo né nello zip delle Releases. Senza secret il modulo salva solo sull'hosting (e non invia email). Se modifichi
+`Codice.gs`, crea una nuova versione del deployment (Gestisci deployment → Modifica → Nuova versione), così l'URL resta lo stesso.
 
-Verifica: `https://www.abitarelaparola.it/api/iscrizione.php` deve rispondere `{"ok":true,…,"google":true}`.
+Verifica: `…/api/iscrizione.php` deve rispondere `{"ok":true,…,"google":true}`.
 
 ## Google Analytics
 
